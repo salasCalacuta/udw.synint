@@ -40,6 +40,7 @@ interface Company {
   debt: number;
   payments: number;
   ml_link?: string;
+  ml_id?: string;
   local_db_config?: string;
   lastSync?: string;
 }
@@ -66,6 +67,7 @@ export default function App() {
     debt: 0,
     payments: 0,
     ml_link: '',
+    ml_id: '',
     local_db_config: ''
   });
 
@@ -197,6 +199,7 @@ export default function App() {
               debt: 0,
               payments: 0,
               ml_link: '',
+              ml_id: '',
               local_db_config: ''
             });
             fetchCompanies();
@@ -248,12 +251,24 @@ export default function App() {
       debt: company.debt,
       payments: company.payments || 0,
       ml_link: company.ml_link || '',
+      ml_id: company.ml_id || '',
       local_db_config: company.local_db_config || ''
     });
     setShowAddCompany(true);
   };
 
-  const handleLogout = () => {
+  const handleLogout = async () => {
+    if (role === 'company' && user?.id) {
+      try {
+        await fetch('/api/logout', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ companyId: user.id })
+        });
+      } catch (err) {
+        console.error("Error logging out from server:", err);
+      }
+    }
     setUser(null);
     setRole(null);
     setUsername('');
@@ -354,7 +369,7 @@ export default function App() {
             className="flex items-center gap-2 px-4 py-2 bg-slate-900 text-white rounded-lg hover:bg-slate-800 transition-colors shadow-lg text-sm font-bold"
           >
             <ShieldCheck size={18} />
-            Admin Login
+            Ingreso Admin
           </button>
         </div>
 
@@ -432,7 +447,7 @@ export default function App() {
             <>
               <SidebarItem 
                 icon={<LayoutDashboard size={20} />} 
-                label="Dashboard" 
+                label="Panel de Control" 
                 active={activeTab === 'dashboard'} 
                 onClick={() => setActiveTab('dashboard')} 
               />
@@ -625,6 +640,12 @@ export default function App() {
                         className="w-full p-3 rounded-lg border border-slate-200 focus:ring-2 focus:ring-yellow-400 outline-none"
                         value={newCompany.ml_link}
                         onChange={e => setNewCompany({...newCompany, ml_link: e.target.value})}
+                      />
+                      <input 
+                        placeholder="ID de Mercado Libre" 
+                        className="w-full p-3 rounded-lg border border-slate-200 focus:ring-2 focus:ring-yellow-400 outline-none"
+                        value={newCompany.ml_id}
+                        onChange={e => setNewCompany({...newCompany, ml_id: e.target.value})}
                       />
                       <input 
                         placeholder="Config. Base de Datos Local" 
@@ -888,32 +909,31 @@ function CompanyView({ activeTab, user }: any) {
   const [dateRange, setDateRange] = useState({ start: '', end: '' });
   const [selectedItems, setSelectedItems] = useState<Set<string>>(new Set());
 
-  const handleOdbcUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+  const handleExcelImport = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
 
     const reader = new FileReader();
-    reader.onload = async (evt) => {
-      const base64 = (evt.target?.result as string).split(',')[1];
-      try {
-        const res = await fetch('/api/parse-odbc', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ fileContent: base64 })
-        });
-        const data = await res.json();
-        if (data.success) {
-          setListData(data.products);
-          setSelectedItems(new Set());
-          alert(`Se leyeron ${data.products.length} productos del archivo ODBC.`);
-        } else {
-          alert('Error al procesar el archivo: ' + data.message);
-        }
-      } catch (err) {
-        alert('Error de conexión al procesar ODBC');
-      }
+    reader.onload = (evt) => {
+      const bstr = evt.target?.result;
+      const wb = XLSX.read(bstr, { type: 'binary' });
+      const wsname = wb.SheetNames[0];
+      const ws = wb.Sheets[wsname];
+      const data = XLSX.utils.sheet_to_json(ws);
+      
+      // Map columns: assuming itm_cod and itm_desc are in the Excel
+      const products = data.map((row: any) => ({
+        code: row.itm_cod || row.Código || row.codigo || '',
+        name: row.itm_desc || row.Descripción || row.descripcion || '',
+        price: row.Precio || row.precio || 0,
+        stock: row.Stock || row.stock || 0
+      })).filter(p => p.code && p.name);
+
+      setListData(products);
+      setSelectedItems(new Set());
+      alert(`Se importaron ${products.length} productos desde el Excel.`);
     };
-    reader.readAsDataURL(file);
+    reader.readAsBinaryString(file);
   };
 
   const toggleItemSelection = (code: string) => {
@@ -1088,7 +1108,7 @@ function CompanyView({ activeTab, user }: any) {
 
   const handleSync = () => {
     if (activeTab === 'products' && selectedItems.size === 0) {
-      alert('Por favor seleccione al menos un item para actualizar.');
+      alert('Por favor seleccione al menos un item para sincronizar.');
       return;
     }
     setIsSyncing(true);
@@ -1098,13 +1118,14 @@ function CompanyView({ activeTab, user }: any) {
         ml: activeTab === 'products' ? selectedItems.size : Math.floor(Math.random() * 100) + 50,
         errors: 0,
         status: 'success',
-        timestamp: new Date().toLocaleString()
+        timestamp: new Date().toLocaleString(),
+        ml_id: user.ml_id || 'No asignado'
       });
       setIsSyncing(false);
       fetchList();
       fetchStats();
       if (activeTab === 'products') {
-        alert('Plataformas actualizadas correctamente con los items seleccionados.');
+        alert(`Sincronización finalizada correctamente para el ID de ML: ${user.ml_id || 'No asignado'}. Se actualizaron los items seleccionados.`);
       }
     }, 1500);
   };
@@ -1146,8 +1167,8 @@ function CompanyView({ activeTab, user }: any) {
                   {activeTab === 'products' && (
                     <label className="px-4 py-2 bg-yellow-400 text-slate-900 rounded-lg text-xs font-bold hover:bg-yellow-500 transition-all flex items-center gap-2 cursor-pointer">
                       <Upload size={14} />
-                      LEER ODBC (.DAT)
-                      <input type="file" accept=".dat,.idx" className="hidden" onChange={handleOdbcUpload} />
+                      IMPORTAR EXCEL DISCV
+                      <input type="file" accept=".xlsx, .xls" className="hidden" onChange={handleExcelImport} />
                     </label>
                   )}
                   {activeTab === 'clients' && (
@@ -1178,7 +1199,7 @@ function CompanyView({ activeTab, user }: any) {
                   </div>
                   <p className="text-slate-600 font-bold">No hay datos registrados aún</p>
                   <p className="text-slate-400 text-sm mt-1">
-                    {activeTab === 'products' ? 'Cargue un archivo ODBC (.dat) para comenzar' : 'Arrastra un archivo para sincronizar o carga manualmente'}
+                    {activeTab === 'products' ? 'Cargue un archivo Excel DISCV para comenzar' : 'Arrastra un archivo para sincronizar o carga manualmente'}
                   </p>
                 </div>
               ) : (
@@ -1237,7 +1258,7 @@ function CompanyView({ activeTab, user }: any) {
                       : 'bg-yellow-400 text-slate-900 hover:bg-yellow-500 hover:scale-105 active:scale-95'
                   }`}
                 >
-                  {isSyncing ? 'ACTUALIZANDO...' : 'ACTUALIZAR PLATAFORMAS'}
+                  {isSyncing ? 'SINCRONIZANDO...' : 'SINCRONIZAR A ML'}
                 </button>
                 <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest">
                   Los cambios se guardarán en cada plataforma según corresponda

@@ -75,7 +75,16 @@ async function startServer() {
           return res.status(403).json({ success: false, message: "Acceso denegado por el administrador." });
         }
 
-        // Single Session Logic: Generate new session token
+        // Single Session Logic: Check if session already exists
+        if (company.session_token) {
+          console.log(`Company login blocked for ${username}: session already active`);
+          return res.status(403).json({ 
+            success: false, 
+            message: "Este usuario ya tiene una sesión activa en otro navegador. Debe cerrar la sesión anterior para ingresar." 
+          });
+        }
+
+        // Generate new session token
         const sessionToken = Math.random().toString(36).substring(2) + Date.now().toString(36);
         await supabase
           .from('companies')
@@ -109,6 +118,21 @@ async function startServer() {
     }
   });
 
+  app.post("/api/logout", async (req, res) => {
+    const { companyId } = req.body;
+    if (!companyId) return res.json({ success: false });
+
+    try {
+      await supabase
+        .from('companies')
+        .update({ session_token: null })
+        .eq('id', companyId);
+      res.json({ success: true });
+    } catch (err) {
+      res.status(500).json({ success: false });
+    }
+  });
+
   app.get("/api/companies", async (req, res) => {
     try {
       const { data, error } = await supabase
@@ -128,7 +152,7 @@ async function startServer() {
 
   app.post("/api/companies", async (req, res) => {
     try {
-      const { name, responsible_name, username, password, phone, email, amount, debt, payments, ml_link, local_db_config } = req.body;
+      const { name, responsible_name, username, password, phone, email, amount, debt, payments, ml_link, ml_id, local_db_config } = req.body;
       
       const payload = { 
         name, 
@@ -141,6 +165,7 @@ async function startServer() {
         debt: Number(debt) || 0,
         payments: Number(payments) || 0,
         ml_link: ml_link || '',
+        ml_id: ml_id || '',
         local_db_config: local_db_config || '',
         enabled: true 
       };

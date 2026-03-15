@@ -160,6 +160,18 @@ export default function App() {
     }
   };
 
+  const resetCompanySession = async (id: string) => {
+    try {
+      const res = await fetch(`/api/reset-session/${id}`, { method: 'POST' });
+      if (res.ok) {
+        alert('Sesión reiniciada correctamente. El usuario ya puede volver a loguearse.');
+        fetchCompanies();
+      }
+    } catch (err) {
+      console.error("Error resetting session:", err);
+    }
+  };
+
   const toggleCompanyStatus = async (id: string, enabled: boolean) => {
     await fetch(`/api/companies/${id}`, {
       method: 'PATCH',
@@ -529,12 +541,26 @@ export default function App() {
               toggleStatus={toggleCompanyStatus}
               showAdd={() => {
                 setEditingCompany(null);
-                setNewCompany({ name: '', responsible_name: '', username: '', password: '', phone: '', email: '', amount: 0, debt: 0, ml_link: '', local_db_config: '' });
+                setNewCompany({ 
+                  name: '', 
+                  responsible_name: '', 
+                  username: '', 
+                  password: '', 
+                  phone: '', 
+                  email: '', 
+                  amount: 0, 
+                  debt: 0, 
+                  ml_link: '', 
+                  local_db_config: '', 
+                  ml_id: '', 
+                  payments: 0 
+                });
                 setShowAddCompany(true);
               }}
               testConnection={testConnection}
               onEdit={startEditCompany}
               onDelete={deleteCompany}
+              onResetSession={resetCompanySession}
             />
           ) : (
             <CompanyView 
@@ -728,7 +754,7 @@ function SidebarItem({ icon, label, active, onClick }: { icon: any, label: strin
   );
 }
 
-function AdminView({ activeTab, companies, toggleStatus, showAdd, testConnection, onEdit, onDelete }: any) {
+function AdminView({ activeTab, companies, toggleStatus, showAdd, testConnection, onEdit, onDelete, onResetSession }: any) {
   const [testStatus, setTestStatus] = useState<any>({});
 
   const handleTestSync = (companyId: string, type: 'ml' | 'local') => {
@@ -872,6 +898,13 @@ function AdminView({ activeTab, companies, toggleStatus, showAdd, testConnection
                         {company.enabled ? <Unlock size={16} /> : <Lock size={16} />}
                       </button>
                       <button 
+                        onClick={() => onResetSession(company.id)}
+                        className="p-2 bg-yellow-50 text-yellow-600 rounded-lg hover:bg-yellow-100 transition-all"
+                        title="Reiniciar Sesión"
+                      >
+                        <RefreshCw size={16} />
+                      </button>
+                      <button 
                         onClick={() => onEdit(company)}
                         className="p-2 bg-blue-50 text-blue-600 rounded-lg hover:bg-blue-100 transition-all"
                         title="Editar"
@@ -915,25 +948,54 @@ function CompanyView({ activeTab, user }: any) {
 
     const reader = new FileReader();
     reader.onload = (evt) => {
-      const bstr = evt.target?.result;
-      const wb = XLSX.read(bstr, { type: 'binary' });
-      const wsname = wb.SheetNames[0];
-      const ws = wb.Sheets[wsname];
-      const data = XLSX.utils.sheet_to_json(ws);
-      
-      // Map columns: assuming itm_cod and itm_desc are in the Excel
-      const products = data.map((row: any) => ({
-        code: row.itm_cod || row.Código || row.codigo || '',
-        name: row.itm_desc || row.Descripción || row.descripcion || '',
-        price: row.Precio || row.precio || 0,
-        stock: row.Stock || row.stock || 0
-      })).filter(p => p.code && p.name);
+      try {
+        const data = new Uint8Array(evt.target?.result as ArrayBuffer);
+        const wb = XLSX.read(data, { type: 'array' });
+        const wsname = wb.SheetNames[0];
+        const ws = wb.Sheets[wsname];
+        const jsonData = XLSX.utils.sheet_to_json(ws);
+        
+        console.log("Excel data raw:", jsonData);
 
-      setListData(products);
-      setSelectedItems(new Set());
-      alert(`Se importaron ${products.length} productos desde el Excel.`);
+        if (jsonData.length === 0) {
+          alert("El archivo Excel parece estar vacío.");
+          return;
+        }
+
+        // Map columns: assuming itm_cod and itm_desc are in the Excel
+        const products = jsonData.map((row: any) => {
+          // Find code column
+          const code = row.itm_cod || row.Código || row.codigo || row.Code || row.code || row['CÓDIGO'] || row['Codigo'] || '';
+          // Find name column
+          const name = row.itm_desc || row.Descripción || row.descripcion || row.Description || row.description || row['DESCRIPCIÓN'] || row['Descripcion'] || '';
+          // Find price column
+          const price = row.Precio || row.precio || row.Price || row.price || row['PRECIO'] || 0;
+          // Find stock column
+          const stock = row.Stock || row.stock || row['STOCK'] || 0;
+
+          return {
+            code: String(code).trim(),
+            name: String(name).trim(),
+            price: Number(price) || 0,
+            stock: Number(stock) || 0
+          };
+        }).filter(p => p.code && p.name);
+
+        console.log("Mapped products:", products);
+
+        if (products.length === 0) {
+          alert("No se encontraron productos válidos en el Excel. Verifique que las columnas itm_cod e itm_desc (o similares) existan.");
+        } else {
+          setListData(products);
+          setSelectedItems(new Set());
+          alert(`Se importaron ${products.length} productos correctamente.`);
+        }
+      } catch (err) {
+        console.error("Error parsing Excel:", err);
+        alert("Error al procesar el archivo Excel. Asegúrese de que sea un formato válido (.xlsx o .xls)");
+      }
     };
-    reader.readAsBinaryString(file);
+    reader.readAsArrayBuffer(file);
   };
 
   const toggleItemSelection = (code: string) => {

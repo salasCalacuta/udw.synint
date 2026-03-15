@@ -133,6 +133,20 @@ async function startServer() {
     }
   });
 
+  app.post("/api/reset-session/:id", async (req, res) => {
+    const { id } = req.params;
+    try {
+      await supabase
+        .from('companies')
+        .update({ session_token: null })
+        .eq('id', id);
+      console.log(`Session reset for company ${id}`);
+      res.json({ success: true });
+    } catch (err) {
+      res.status(500).json({ success: false });
+    }
+  });
+
   app.get("/api/companies", async (req, res) => {
     try {
       const { data, error } = await supabase

@@ -9,12 +9,21 @@ dotenv.config();
 const supabaseUrl = process.env.SUPABASE_URL || '';
 const supabaseKey = process.env.SUPABASE_ANON_KEY || '';
 
-if (!supabaseUrl || !supabaseKey) {
-  console.error("CRITICAL ERROR: Supabase environment variables are missing!");
-  console.error("Please set SUPABASE_URL and SUPABASE_ANON_KEY in the Secrets panel.");
-}
+let supabase: any;
 
-const supabase = createClient(supabaseUrl, supabaseKey);
+if (!supabaseUrl || !supabaseKey) {
+  console.error("************************************************************");
+  console.error("ERROR CRÍTICO: Faltan las variables de Supabase.");
+  console.error("Asegúrate de configurar SUPABASE_URL y SUPABASE_ANON_KEY");
+  console.error("en el panel de Environment de Render.");
+  console.error("************************************************************");
+} else {
+  try {
+    supabase = createClient(supabaseUrl, supabaseKey);
+  } catch (err: any) {
+    console.error("Error al inicializar Supabase:", err.message);
+  }
+}
 
 async function startServer() {
   const app = express();
@@ -66,12 +75,37 @@ async function startServer() {
           return res.status(403).json({ success: false, message: "Acceso denegado por el administrador." });
         }
 
-        console.log(`Company login successful for ${username}`);
-        return res.json({ success: true, user: { ...company, role: 'company' } });
+        // Single Session Logic: Generate new session token
+        const sessionToken = Math.random().toString(36).substring(2) + Date.now().toString(36);
+        await supabase
+          .from('companies')
+          .update({ session_token: sessionToken })
+          .eq('id', company.id);
+
+        console.log(`Company login successful for ${username}, new session: ${sessionToken}`);
+        return res.json({ success: true, user: { ...company, session_token: sessionToken, role: 'company' } });
       } catch (err) {
         console.error("Login Error:", err);
         return res.status(500).json({ success: false, message: "Error en el servidor de base de datos" });
       }
+    }
+  });
+
+  app.post("/api/check-session", async (req, res) => {
+    const { companyId, sessionToken } = req.body;
+    if (!companyId || !sessionToken) return res.json({ valid: false });
+
+    try {
+      const { data, error } = await supabase
+        .from('companies')
+        .select('session_token')
+        .eq('id', companyId)
+        .single();
+
+      if (error || !data) return res.json({ valid: false });
+      return res.json({ valid: data.session_token === sessionToken });
+    } catch (err) {
+      return res.json({ valid: false });
     }
   });
 
@@ -94,7 +128,7 @@ async function startServer() {
 
   app.post("/api/companies", async (req, res) => {
     try {
-      const { name, responsible_name, username, password, phone, email, amount, debt, payments } = req.body;
+      const { name, responsible_name, username, password, phone, email, amount, debt, payments, ml_link, local_db_config } = req.body;
       
       const payload = { 
         name, 
@@ -106,6 +140,8 @@ async function startServer() {
         amount: Number(amount) || 0, 
         debt: Number(debt) || 0,
         payments: Number(payments) || 0,
+        ml_link: ml_link || '',
+        local_db_config: local_db_config || '',
         enabled: true 
       };
 
@@ -277,6 +313,47 @@ async function startServer() {
     }
   });
 
+  // ODBC Parser (Simulated for .dat file upload)
+  app.post("/api/parse-odbc", (req, res) => {
+    const { fileContent } = req.body; // Base64 or string
+    if (!fileContent) return res.status(400).json({ error: "No file content provided" });
+
+    try {
+      const buffer = Buffer.from(fileContent, 'base64');
+      const text = buffer.toString('latin1'); // Using latin1 for extended characters
+      
+      // Based on the provided sample, it looks like fixed width records.
+      // Let's try to find records. Each record seems to start with a code.
+      // Sample: "393          Acquas TE C/ ROSCA CENTRAL 1/2X1/2      un"
+      // itm_cod: 13 chars
+      // itm_desc: 40 chars
+      // itm_med: 3 chars
+      
+      const lines = text.split('\n');
+      const products = [];
+      
+      for (const line of lines) {
+        if (line.length > 50) {
+          const itm_cod = line.substring(0, 13).trim();
+          const itm_desc = line.substring(13, 53).trim();
+          
+          if (itm_cod && itm_desc && !isNaN(Number(itm_cod))) {
+            products.push({
+              code: itm_cod,
+              name: itm_desc,
+              price: 0,
+              stock: 0
+            });
+          }
+        }
+      }
+      
+      res.json({ success: true, products });
+    } catch (err: any) {
+      res.status(500).json({ success: false, message: "Error parsing file: " + err.message });
+    }
+  });
+
   // Vite middleware for development
   if (process.env.NODE_ENV !== "production") {
     const vite = await createViteServer({
@@ -292,7 +369,7 @@ async function startServer() {
     });
   }
 
-  app.listen(PORT, "0.0.0.0", () => {
+  app.listen(Number(PORT), "0.0.0.0", () => {
     console.log(`Server running on http://localhost:${PORT}`);
   });
 }

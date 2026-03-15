@@ -71,6 +71,30 @@ export default function App() {
 
   const [editingCompany, setEditingCompany] = useState<Company | null>(null);
 
+  // Single Session Check
+  useEffect(() => {
+    let interval: any;
+    if (role === 'company' && user?.id && user?.session_token) {
+      interval = setInterval(async () => {
+        try {
+          const res = await fetch('/api/check-session', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ companyId: user.id, sessionToken: user.session_token })
+          });
+          const data = await res.json();
+          if (data.valid === false) {
+            alert('Su sesión ha sido iniciada en otro dispositivo. Se cerrará esta sesión.');
+            handleLogout();
+          }
+        } catch (err) {
+          console.error("Session check error:", err);
+        }
+      }, 10000); // Check every 10 seconds
+    }
+    return () => clearInterval(interval);
+  }, [role, user]);
+
   useEffect(() => {
     console.log("MLSync App Started");
   }, []);
@@ -862,6 +886,45 @@ function CompanyView({ activeTab, user }: any) {
   const [newItem, setNewItem] = useState<any>({});
   const [mlSales, setMlSales] = useState<any[]>([]);
   const [dateRange, setDateRange] = useState({ start: '', end: '' });
+  const [selectedItems, setSelectedItems] = useState<Set<string>>(new Set());
+
+  const handleOdbcUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    const reader = new FileReader();
+    reader.onload = async (evt) => {
+      const base64 = (evt.target?.result as string).split(',')[1];
+      try {
+        const res = await fetch('/api/parse-odbc', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ fileContent: base64 })
+        });
+        const data = await res.json();
+        if (data.success) {
+          setListData(data.products);
+          setSelectedItems(new Set());
+          alert(`Se leyeron ${data.products.length} productos del archivo ODBC.`);
+        } else {
+          alert('Error al procesar el archivo: ' + data.message);
+        }
+      } catch (err) {
+        alert('Error de conexión al procesar ODBC');
+      }
+    };
+    reader.readAsDataURL(file);
+  };
+
+  const toggleItemSelection = (code: string) => {
+    const newSelection = new Set(selectedItems);
+    if (newSelection.has(code)) {
+      newSelection.delete(code);
+    } else {
+      newSelection.add(code);
+    }
+    setSelectedItems(newSelection);
+  };
 
   const handleExcelUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -882,7 +945,7 @@ function CompanyView({ activeTab, user }: any) {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          type: activeTab === 'inventory' ? 'products' : 'clients',
+          type: activeTab === 'products' ? 'products' : 'clients',
           data: data,
           companyId: user.id
         })
@@ -954,7 +1017,7 @@ function CompanyView({ activeTab, user }: any) {
     setIsLoading(true);
     try {
       let endpoint = '';
-      if (activeTab === 'inventory') endpoint = `/api/products?companyId=${user.id}`;
+      if (activeTab === 'products') endpoint = `/api/products?companyId=${user.id}`;
       if (activeTab === 'clients') endpoint = `/api/clients?companyId=${user.id}`;
       if (activeTab === 'invoices') endpoint = `/api/invoices?companyId=${user.id}`;
       
@@ -985,7 +1048,7 @@ function CompanyView({ activeTab, user }: any) {
     
     try {
       let endpoint = '';
-      if (activeTab === 'inventory') endpoint = `/api/products/${id}`;
+      if (activeTab === 'products') endpoint = `/api/products/${id}`;
       if (activeTab === 'clients') endpoint = `/api/clients/${id}`;
       if (activeTab === 'invoices') endpoint = `/api/invoices/${id}`;
 
@@ -1002,7 +1065,7 @@ function CompanyView({ activeTab, user }: any) {
   const handleManualAdd = async () => {
     try {
       let endpoint = '';
-      if (activeTab === 'inventory') endpoint = '/api/products';
+      if (activeTab === 'products') endpoint = '/api/products';
       if (activeTab === 'clients') endpoint = '/api/clients';
       if (activeTab === 'invoices') endpoint = '/api/invoices';
 
@@ -1024,11 +1087,15 @@ function CompanyView({ activeTab, user }: any) {
   };
 
   const handleSync = () => {
+    if (activeTab === 'products' && selectedItems.size === 0) {
+      alert('Por favor seleccione al menos un item para actualizar.');
+      return;
+    }
     setIsSyncing(true);
     setTimeout(() => {
       setSyncData({
-        local: Math.floor(Math.random() * 100) + 50,
-        ml: Math.floor(Math.random() * 100) + 50,
+        local: activeTab === 'products' ? selectedItems.size : Math.floor(Math.random() * 100) + 50,
+        ml: activeTab === 'products' ? selectedItems.size : Math.floor(Math.random() * 100) + 50,
         errors: 0,
         status: 'success',
         timestamp: new Date().toLocaleString()
@@ -1036,6 +1103,9 @@ function CompanyView({ activeTab, user }: any) {
       setIsSyncing(false);
       fetchList();
       fetchStats();
+      if (activeTab === 'products') {
+        alert('Plataformas actualizadas correctamente con los items seleccionados.');
+      }
     }, 1500);
   };
 
@@ -1069,24 +1139,33 @@ function CompanyView({ activeTab, user }: any) {
               <div className="flex items-center justify-between mb-8">
                 <h3 className="text-xl font-bold text-slate-800 flex items-center gap-2">
                   <Upload size={24} className="text-yellow-500" />
-                  {activeTab === 'inventory' ? 'Inventario de Productos' : 
+                  {activeTab === 'products' ? 'Inventario de Productos (ODBC)' : 
                    activeTab === 'clients' ? 'Mis Clientes' : 'Facturación'}
                 </h3>
                 <div className="flex items-center gap-3">
-                  {(activeTab === 'inventory' || activeTab === 'clients') && (
-                    <label className="px-4 py-2 bg-blue-600 text-white rounded-lg text-xs font-bold hover:bg-blue-700 transition-all flex items-center gap-2 cursor-pointer">
+                  {activeTab === 'products' && (
+                    <label className="px-4 py-2 bg-yellow-400 text-slate-900 rounded-lg text-xs font-bold hover:bg-yellow-500 transition-all flex items-center gap-2 cursor-pointer">
                       <Upload size={14} />
-                      CARGAR EXCEL
-                      <input type="file" accept=".xlsx, .xls" className="hidden" onChange={handleExcelUpload} />
+                      LEER ODBC (.DAT)
+                      <input type="file" accept=".dat,.idx" className="hidden" onChange={handleOdbcUpload} />
                     </label>
                   )}
-                  <button 
-                    onClick={() => setShowManualAdd(true)}
-                    className="px-4 py-2 bg-slate-900 text-white rounded-lg text-xs font-bold hover:bg-slate-800 transition-all flex items-center gap-2"
-                  >
-                    <Plus size={14} />
-                    CARGA MANUAL
-                  </button>
+                  {activeTab === 'clients' && (
+                    <>
+                      <label className="px-4 py-2 bg-blue-600 text-white rounded-lg text-xs font-bold hover:bg-blue-700 transition-all flex items-center gap-2 cursor-pointer">
+                        <Upload size={14} />
+                        CARGAR EXCEL
+                        <input type="file" accept=".xlsx, .xls" className="hidden" onChange={handleExcelUpload} />
+                      </label>
+                      <button 
+                        onClick={() => setShowManualAdd(true)}
+                        className="px-4 py-2 bg-slate-900 text-white rounded-lg text-xs font-bold hover:bg-slate-800 transition-all flex items-center gap-2"
+                      >
+                        <Plus size={14} />
+                        CARGA MANUAL
+                      </button>
+                    </>
+                  )}
                 </div>
               </div>
               
@@ -1098,29 +1177,50 @@ function CompanyView({ activeTab, user }: any) {
                     <Upload size={32} />
                   </div>
                   <p className="text-slate-600 font-bold">No hay datos registrados aún</p>
-                  <p className="text-slate-400 text-sm mt-1">Arrastra un archivo para sincronizar o carga manualmente</p>
+                  <p className="text-slate-400 text-sm mt-1">
+                    {activeTab === 'products' ? 'Cargue un archivo ODBC (.dat) para comenzar' : 'Arrastra un archivo para sincronizar o carga manualmente'}
+                  </p>
                 </div>
               ) : (
                 <div className="space-y-4">
                   {listData.map((item: any) => (
-                    <div key={item.id} className="p-4 border border-slate-100 rounded-xl flex justify-between items-center hover:bg-slate-50 transition-colors group">
-                      <div>
-                        <div className="font-bold text-slate-800">{item.name || item.number}</div>
-                        <div className="text-xs text-slate-400">
-                          {activeTab === 'inventory' ? `Stock: ${item.stock} | $${item.price}` :
-                           activeTab === 'clients' ? item.email : `Total: $${item.total}`}
+                    <div 
+                      key={item.id || item.code} 
+                      onClick={() => activeTab === 'products' && toggleItemSelection(item.code)}
+                      className={`p-4 border rounded-xl flex justify-between items-center transition-colors group cursor-pointer ${
+                        activeTab === 'products' && selectedItems.has(item.code) 
+                          ? 'border-yellow-400 bg-yellow-50' 
+                          : 'border-slate-100 hover:bg-slate-50'
+                      }`}
+                    >
+                      <div className="flex items-center gap-4">
+                        {activeTab === 'products' && (
+                          <div className={`w-5 h-5 rounded border flex items-center justify-center transition-colors ${
+                            selectedItems.has(item.code) ? 'bg-yellow-400 border-yellow-400' : 'border-slate-300 bg-white'
+                          }`}>
+                            {selectedItems.has(item.code) && <CheckCircle2 size={12} className="text-slate-900" />}
+                          </div>
+                        )}
+                        <div>
+                          <div className="font-bold text-slate-800">{item.name || item.number}</div>
+                          <div className="text-xs text-slate-400 font-medium">
+                            {activeTab === 'products' ? `Código: ${item.code}` :
+                             activeTab === 'clients' ? item.email : `Total: $${item.total}`}
+                          </div>
                         </div>
                       </div>
                       <div className="flex items-center gap-4">
                         <div className="text-xs font-black text-slate-300">
-                          {new Date(item.created_at).toLocaleDateString()}
+                          {item.created_at ? new Date(item.created_at).toLocaleDateString() : 'Lectura Local'}
                         </div>
-                        <button 
-                          onClick={() => handleDeleteItem(item.id)}
-                          className="p-2 text-rose-400 hover:text-rose-600 opacity-0 group-hover:opacity-100 transition-all"
-                        >
-                          <Trash2 size={14} />
-                        </button>
+                        {activeTab !== 'products' && (
+                          <button 
+                            onClick={(e) => { e.stopPropagation(); handleDeleteItem(item.id); }}
+                            className="p-2 text-rose-400 hover:text-rose-600 opacity-0 group-hover:opacity-100 transition-all"
+                          >
+                            <Trash2 size={14} />
+                          </button>
+                        )}
                       </div>
                     </div>
                   ))}
@@ -1272,17 +1372,6 @@ function CompanyView({ activeTab, user }: any) {
           </div>
 
           <div className="space-y-6">
-            <div className="bg-slate-900 text-white p-6 rounded-2xl shadow-xl">
-              <h4 className="font-black text-xs uppercase tracking-widest text-slate-400 mb-4">Información de Ayuda</h4>
-              <p className="text-sm text-slate-300 leading-relaxed">
-                Asegúrese de que el archivo local contenga las columnas correctas según el manual de integración. 
-                Las diferencias encontradas se resaltarán para su revisión manual antes de impactar en Mercado Libre.
-              </p>
-              <button className="mt-6 w-full py-3 bg-white/10 hover:bg-white/20 rounded-xl text-sm font-bold transition-colors">
-                Descargar Plantilla
-              </button>
-            </div>
-            
             <div className="bg-white p-6 rounded-2xl shadow-xl border border-slate-100">
               <h4 className="font-black text-xs uppercase tracking-widest text-slate-400 mb-4">Últimas Sincronizaciones</h4>
               <div className="space-y-4">

@@ -11,11 +11,26 @@ const supabaseKey = process.env.SUPABASE_ANON_KEY || '';
 
 let supabase: any;
 
-if (!supabaseUrl || !supabaseKey) {
+const isValidUrl = (url: string) => {
+  try {
+    new URL(url);
+    return true;
+  } catch {
+    return false;
+  }
+};
+
+if (!supabaseUrl || !supabaseKey || 
+    supabaseUrl.includes("your-project-id") || 
+    supabaseUrl.includes("YOUR_SUPABASE_URL") || 
+    supabaseKey.includes("your-anon-key") || 
+    supabaseKey.includes("YOUR_SUPABASE_ANON_KEY") || 
+    !isValidUrl(supabaseUrl)) {
   console.error("************************************************************");
-  console.error("ERROR CRÍTICO: Faltan las variables de Supabase.");
+  console.error("ERROR CRÍTICO: Configuración de Supabase inválida o faltante.");
   console.error("Asegúrate de configurar SUPABASE_URL y SUPABASE_ANON_KEY");
-  console.error("en el panel de Environment de Render.");
+  console.error("en el panel de Secrets de AI Studio.");
+  console.error("URL actual:", supabaseUrl || "(vacío)");
   console.error("************************************************************");
 } else {
   try {
@@ -147,6 +162,201 @@ async function startServer() {
     }
   });
 
+  app.post("/api/refresh-access", async (req, res) => {
+    const { username, password } = req.body;
+    try {
+      const { data: company, error } = await supabase
+        .from('companies')
+        .select('id')
+        .eq('username', username)
+        .eq('password', password)
+        .single();
+
+      if (error || !company) {
+        return res.status(401).json({ success: false, message: "Credenciales incorrectas" });
+      }
+
+      await supabase
+        .from('companies')
+        .update({ session_token: null })
+        .eq('id', company.id);
+
+      res.json({ success: true, message: "Acceso refrescado. Ya puede volver a ingresar." });
+    } catch (err) {
+      res.status(500).json({ success: false, message: "Error al refrescar acceso" });
+    }
+  });
+
+  // Mercado Libre OAuth
+  app.get("/api/ml/auth-url", async (req, res) => {
+    const { companyId } = req.query;
+    if (!companyId) return res.status(400).json({ error: "companyId is required" });
+
+    try {
+      const { data: company, error } = await supabase
+        .from('companies')
+        .select('ml_client_id, ml_callback_url')
+        .eq('id', companyId)
+        .single();
+
+      if (error || !company) {
+        return res.status(404).json({ error: "Empresa no encontrada" });
+      }
+
+      const clientId = company.ml_client_id || process.env.ML_CLIENT_ID;
+      const redirectUri = company.ml_callback_url || `${req.protocol}://${req.get('host')}/api/ml/callback`;
+      
+      const authUrl = `https://auth.mercadolibre.com.ar/authorization?response_type=code&client_id=${clientId}&redirect_uri=${encodeURIComponent(redirectUri)}&state=${companyId}`;
+      res.json({ url: authUrl });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  app.get("/api/ml/callback", async (req, res) => {
+    const { code, state: companyId } = req.query;
+
+    if (!code) return res.status(400).send("No code provided");
+    if (!companyId) return res.status(400).send("No companyId (state) provided");
+
+    try {
+      const { data: company, error: compError } = await supabase
+        .from('companies')
+        .select('ml_client_id, ml_client_secret, ml_callback_url')
+        .eq('id', companyId)
+        .single();
+
+      if (compError || !company) throw new Error("Empresa no encontrada");
+
+      const clientId = company.ml_client_id || process.env.ML_CLIENT_ID;
+      const clientSecret = company.ml_client_secret || process.env.ML_CLIENT_SECRET;
+      const redirectUri = company.ml_callback_url || `${req.protocol}://${req.get('host')}/api/ml/callback`;
+
+      const response = await fetch("https://api.mercadolibre.com/oauth/token", {
+        method: "POST",
+        headers: { "Content-Type": "application/x-www-form-urlencoded" },
+        body: new URLSearchParams({
+          grant_type: "authorization_code",
+          client_id: clientId!,
+          client_secret: clientSecret!,
+          code: code as string,
+          redirect_uri: redirectUri
+        })
+      });
+
+      const data = await response.json();
+      if (data.error) throw new Error(data.error_description || data.error);
+
+      // We need to know which company this is for. 
+      // Ideally we'd use 'state' to pass the companyId.
+      // For now, let's return the data to the frontend or handle it if state is present.
+      
+      res.send(`
+        <html>
+          <body>
+            <script>
+              window.opener.postMessage({ type: 'ML_AUTH_SUCCESS', data: ${JSON.stringify(data)} }, '*');
+              window.close();
+            </script>
+            <p>Autenticación exitosa. Esta ventana se cerrará automáticamente.</p>
+          </body>
+        </html>
+      `);
+    } catch (err: any) {
+      res.status(500).send("Error during ML OAuth: " + err.message);
+    }
+  });
+
+  app.post("/api/ml/save-token", async (req, res) => {
+    const { companyId, tokenData } = req.body;
+    try {
+      const { error } = await supabase
+        .from('companies')
+        .update({
+          ml_access_token: tokenData.access_token,
+          ml_refresh_token: tokenData.refresh_token,
+          ml_user_id: tokenData.user_id,
+          ml_token_expires: new Date(Date.now() + tokenData.expires_in * 1000).toISOString()
+        })
+        .eq('id', companyId);
+
+      if (error) throw error;
+      res.json({ success: true });
+    } catch (err: any) {
+      res.status(500).json({ success: false, message: err.message });
+    }
+  });
+
+  app.post("/api/ml/sync-items", async (req, res) => {
+    const { companyId, items } = req.body;
+    try {
+      const { data: company, error: compError } = await supabase
+        .from('companies')
+        .select('*')
+        .eq('id', companyId)
+        .single();
+
+      if (compError || !company) throw new Error("Empresa no encontrada");
+      if (!company.ml_access_token) throw new Error("No autorizado en Mercado Libre");
+
+      const results = [];
+      for (const item of items) {
+        // Mapping as requested:
+        // SKU -> seller_custom_field
+        // Nombre -> title
+        // Precio -> price
+        // Stock -> available_quantity
+        // Categoría -> category_id (defaulting to MLA1652 if not provided)
+        // Imágenes -> pictures
+
+        const mlItem = {
+          title: item.name,
+          category_id: item.category_id || "MLA1652",
+          price: Number(item.price),
+          currency_id: "ARS",
+          available_quantity: Number(item.stock),
+          buying_mode: "buy_it_now",
+          listing_type_id: "gold_special",
+          condition: "new",
+          seller_custom_field: item.code,
+          pictures: item.pictures || [
+            { source: "https://picsum.photos/seed/product/800/600" }
+          ]
+        };
+
+        const response = await fetch("https://api.mercadolibre.com/items", {
+          method: "POST",
+          headers: {
+            "Authorization": `Bearer ${company.ml_access_token}`,
+            "Content-Type": "application/json"
+          },
+          body: JSON.stringify(mlItem)
+        });
+
+        const data = await response.json();
+        if (data.id) {
+          // Save item_id to database
+          // Assuming we update the product in our local 'products' table if it exists
+          // Or just return it. The prompt says "guardarlo en la base de datos: producto_id_local -> item_id_mercadolibre"
+          
+          await supabase
+            .from('products')
+            .update({ ml_item_id: data.id })
+            .eq('code', item.code)
+            .eq('company_id', companyId);
+
+          results.push({ code: item.code, ml_id: data.id, status: 'success' });
+        } else {
+          results.push({ code: item.code, error: data.message || 'Error desconocido', status: 'error' });
+        }
+      }
+
+      res.json({ success: true, results });
+    } catch (err: any) {
+      res.status(500).json({ success: false, message: err.message });
+    }
+  });
+
   app.get("/api/companies", async (req, res) => {
     try {
       const { data, error } = await supabase
@@ -166,7 +376,11 @@ async function startServer() {
 
   app.post("/api/companies", async (req, res) => {
     try {
-      const { name, responsible_name, username, password, phone, email, amount, debt, payments, ml_link, ml_id, local_db_config } = req.body;
+      const { 
+        name, responsible_name, username, password, phone, email, 
+        amount, debt, payments, 
+        ml_client_id, ml_client_secret, ml_callback_url 
+      } = req.body;
       
       const payload = { 
         name, 
@@ -178,9 +392,9 @@ async function startServer() {
         amount: Number(amount) || 0, 
         debt: Number(debt) || 0,
         payments: Number(payments) || 0,
-        ml_link: ml_link || '',
-        ml_id: ml_id || '',
-        local_db_config: local_db_config || '',
+        ml_client_id: ml_client_id || '',
+        ml_client_secret: ml_client_secret || '',
+        ml_callback_url: ml_callback_url || '',
         enabled: true 
       };
 

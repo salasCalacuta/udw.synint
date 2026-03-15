@@ -39,9 +39,13 @@ interface Company {
   amount: number;
   debt: number;
   payments: number;
-  ml_link?: string;
-  ml_id?: string;
-  local_db_config?: string;
+  ml_client_id?: string;
+  ml_client_secret?: string;
+  ml_callback_url?: string;
+  ml_access_token?: string;
+  ml_refresh_token?: string;
+  ml_user_id?: string;
+  ml_token_expires?: string;
   lastSync?: string;
 }
 
@@ -66,9 +70,9 @@ export default function App() {
     amount: 0, 
     debt: 0,
     payments: 0,
-    ml_link: '',
-    ml_id: '',
-    local_db_config: ''
+    ml_client_id: '',
+    ml_client_secret: '',
+    ml_callback_url: ''
   });
 
   const [editingCompany, setEditingCompany] = useState<Company | null>(null);
@@ -210,9 +214,9 @@ export default function App() {
               amount: 0, 
               debt: 0,
               payments: 0,
-              ml_link: '',
-              ml_id: '',
-              local_db_config: ''
+              ml_client_id: '',
+              ml_client_secret: '',
+              ml_callback_url: ''
             });
             fetchCompanies();
           } else {
@@ -262,9 +266,9 @@ export default function App() {
       amount: company.amount,
       debt: company.debt,
       payments: company.payments || 0,
-      ml_link: company.ml_link || '',
-      ml_id: company.ml_id || '',
-      local_db_config: company.local_db_config || ''
+      ml_client_id: company.ml_client_id || '',
+      ml_client_secret: company.ml_client_secret || '',
+      ml_callback_url: company.ml_callback_url || ''
     });
     setShowAddCompany(true);
   };
@@ -550,10 +554,10 @@ export default function App() {
                   email: '', 
                   amount: 0, 
                   debt: 0, 
-                  ml_link: '', 
-                  local_db_config: '', 
-                  ml_id: '', 
-                  payments: 0 
+                  payments: 0,
+                  ml_client_id: '',
+                  ml_client_secret: '',
+                  ml_callback_url: ''
                 });
                 setShowAddCompany(true);
               }}
@@ -567,6 +571,7 @@ export default function App() {
               key="company"
               activeTab={activeTab} 
               user={user}
+              setUser={setUser}
             />
           )}
         </AnimatePresence>
@@ -662,22 +667,22 @@ export default function App() {
                     <div className="space-y-2">
                       <h4 className="text-xs font-black text-slate-400 uppercase tracking-widest">Config. Sincronización</h4>
                       <input 
-                        placeholder="Link Mercado Libre" 
+                        placeholder="ML Client ID" 
                         className="w-full p-3 rounded-lg border border-slate-200 focus:ring-2 focus:ring-yellow-400 outline-none"
-                        value={newCompany.ml_link}
-                        onChange={e => setNewCompany({...newCompany, ml_link: e.target.value})}
+                        value={newCompany.ml_client_id}
+                        onChange={e => setNewCompany({...newCompany, ml_client_id: e.target.value})}
                       />
                       <input 
-                        placeholder="ID de Mercado Libre" 
+                        placeholder="ML Client Secret" 
                         className="w-full p-3 rounded-lg border border-slate-200 focus:ring-2 focus:ring-yellow-400 outline-none"
-                        value={newCompany.ml_id}
-                        onChange={e => setNewCompany({...newCompany, ml_id: e.target.value})}
+                        value={newCompany.ml_client_secret}
+                        onChange={e => setNewCompany({...newCompany, ml_client_secret: e.target.value})}
                       />
                       <input 
-                        placeholder="Config. Base de Datos Local" 
+                        placeholder="ML Callback URL" 
                         className="w-full p-3 rounded-lg border border-slate-200 focus:ring-2 focus:ring-yellow-400 outline-none"
-                        value={newCompany.local_db_config}
-                        onChange={e => setNewCompany({...newCompany, local_db_config: e.target.value})}
+                        value={newCompany.ml_callback_url}
+                        onChange={e => setNewCompany({...newCompany, ml_callback_url: e.target.value})}
                       />
                     </div>
                   </div>
@@ -757,7 +762,7 @@ function SidebarItem({ icon, label, active, onClick }: { icon: any, label: strin
 function AdminView({ activeTab, companies, toggleStatus, showAdd, testConnection, onEdit, onDelete, onResetSession }: any) {
   const [testStatus, setTestStatus] = useState<any>({});
 
-  const handleTestSync = (companyId: string, type: 'ml' | 'local') => {
+  const handleTestSync = (companyId: string, type: 'ml') => {
     setTestStatus({ ...testStatus, [`${companyId}-${type}`]: 'testing' });
     setTimeout(() => {
       setTestStatus({ ...testStatus, [`${companyId}-${type}`]: 'success' });
@@ -779,12 +784,6 @@ function AdminView({ activeTab, companies, toggleStatus, showAdd, testConnection
           <p className="text-slate-500 font-medium mt-1">Administración central de MLSync</p>
         </div>
         <div className="flex gap-3">
-          <button 
-            onClick={testConnection}
-            className="flex items-center gap-2 px-4 py-3 bg-blue-100 text-blue-700 rounded-xl font-bold hover:bg-blue-200 transition-all text-sm"
-          >
-            Probar Conexión Supabase
-          </button>
           {activeTab === 'companies' && (
             <button 
               onClick={showAdd}
@@ -834,7 +833,7 @@ function AdminView({ activeTab, companies, toggleStatus, showAdd, testConnection
                       <div className="flex items-center justify-between gap-2">
                         <div className="flex items-center gap-2 overflow-hidden">
                           <Tag size={12} className="text-yellow-500 shrink-0" />
-                          <span className="text-[10px] text-slate-500 truncate max-w-[80px]">{company.ml_link || 'No config.'}</span>
+                          <span className="text-[10px] text-slate-500 truncate max-w-[80px]">Config. Mercado Libre</span>
                         </div>
                         <div className="flex gap-1">
                           <button 
@@ -849,26 +848,8 @@ function AdminView({ activeTab, companies, toggleStatus, showAdd, testConnection
                           </button>
                         </div>
                       </div>
-                      <div className="flex items-center justify-between gap-2">
-                        <div className="flex items-center gap-2 overflow-hidden">
-                          <Boxes size={12} className="text-blue-500 shrink-0" />
-                          <span className="text-[10px] text-slate-500 truncate max-w-[80px]">{company.local_db_config || 'No config.'}</span>
-                        </div>
-                        <div className="flex gap-1">
-                          <button 
-                            onClick={() => handleTestSync(company.id, 'local')}
-                            className={`p-1 rounded text-[8px] font-black uppercase transition-all ${
-                              testStatus[`${company.id}-local`] === 'testing' ? 'bg-blue-100 text-blue-600 animate-pulse' :
-                              testStatus[`${company.id}-local`] === 'success' ? 'bg-green-100 text-green-600' :
-                              'bg-slate-100 text-slate-600 hover:bg-slate-200'
-                            }`}
-                          >
-                            {testStatus[`${company.id}-local`] === 'testing' ? 'Probando...' : 'Probar DB'}
-                          </button>
-                        </div>
-                      </div>
-                      { (testStatus[`${company.id}-ml`] === 'success' || testStatus[`${company.id}-local`] === 'success') && (
-                        <div className="flex items-center gap-1 text-[8px] font-black text-green-600 uppercase">
+                      { testStatus[`${company.id}-ml`] === 'success' && (
+                        <div className="flex items-center gap-1 text-[8px] font-black text-green-600 uppercase mt-2">
                           <Activity size={10} />
                           Sincronización Activa
                         </div>
@@ -930,7 +911,7 @@ function AdminView({ activeTab, companies, toggleStatus, showAdd, testConnection
   );
 }
 
-function CompanyView({ activeTab, user }: any) {
+function CompanyView({ activeTab, user, setUser }: any) {
   const [syncData, setSyncData] = useState<any>(null);
   const [isSyncing, setIsSyncing] = useState(false);
   const [stats, setStats] = useState({ products: 0, clients: 0, invoices: 0 });
@@ -972,12 +953,18 @@ function CompanyView({ activeTab, user }: any) {
           const price = row.Precio || row.precio || row.Price || row.price || row['PRECIO'] || 0;
           // Find stock column
           const stock = row.Stock || row.stock || row['STOCK'] || 0;
+          // Find category column
+          const category = row.Categoria || row.categoria || row.Category || row.category || row['CATEGORÍA'] || 'MLA1652';
+          // Find image column
+          const imageUrl = row.Imagen || row.imagen || row.Image || row.image || row['IMAGEN'] || '';
 
           return {
             code: String(code).trim(),
             name: String(name).trim(),
             price: Number(price) || 0,
-            stock: Number(stock) || 0
+            stock: Number(stock) || 0,
+            category_id: String(category).trim(),
+            pictures: imageUrl ? [{ source: String(imageUrl).trim() }] : null
           };
         }).filter(p => p.code && p.name);
 
@@ -1168,29 +1155,111 @@ function CompanyView({ activeTab, user }: any) {
     }
   };
 
-  const handleSync = () => {
+  const handleSync = async () => {
     if (activeTab === 'products' && selectedItems.size === 0) {
       alert('Por favor seleccione al menos un item para sincronizar.');
       return;
     }
-    setIsSyncing(true);
-    setTimeout(() => {
-      setSyncData({
-        local: activeTab === 'products' ? selectedItems.size : Math.floor(Math.random() * 100) + 50,
-        ml: activeTab === 'products' ? selectedItems.size : Math.floor(Math.random() * 100) + 50,
-        errors: 0,
-        status: 'success',
-        timestamp: new Date().toLocaleString(),
-        ml_id: user.ml_id || 'No asignado'
-      });
-      setIsSyncing(false);
-      fetchList();
-      fetchStats();
-      if (activeTab === 'products') {
-        alert(`Sincronización finalizada correctamente para el ID de ML: ${user.ml_id || 'No asignado'}. Se actualizaron los items seleccionados.`);
+
+    if (activeTab === 'products') {
+      // Check if we have ML token
+      if (!user.ml_access_token) {
+        // Start OAuth flow
+        try {
+          const res = await fetch(`/api/ml/auth-url?companyId=${user.id}`);
+          const { url } = await res.json();
+          window.open(url, 'ML_AUTH', 'width=600,height=700');
+        } catch (err) {
+          alert('Error al iniciar autenticación con Mercado Libre');
+        }
+        return;
       }
-    }, 1500);
+
+      setIsSyncing(true);
+      try {
+        const itemsToSync = listData.filter(item => selectedItems.has(item.code));
+        const res = await fetch('/api/ml/sync-items', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            companyId: user.id,
+            items: itemsToSync
+          })
+        });
+        const data = await res.json();
+        
+        if (data.success) {
+          const successCount = data.results.filter((r: any) => r.status === 'success').length;
+          const errorCount = data.results.filter((r: any) => r.status === 'error').length;
+          
+          setSyncData({
+            local: itemsToSync.length,
+            ml: successCount,
+            errors: errorCount,
+            status: 'success',
+            timestamp: new Date().toLocaleString()
+          });
+          
+          alert(`Sincronización finalizada. Éxitos: ${successCount}, Errores: ${errorCount}`);
+          fetchList();
+          fetchStats();
+        } else {
+          alert('Error en la sincronización: ' + data.message);
+        }
+      } catch (err) {
+        alert('Error de conexión al sincronizar');
+      } finally {
+        setIsSyncing(false);
+      }
+    } else {
+      // Mock sync for other tabs
+      setIsSyncing(true);
+      setTimeout(() => {
+        setSyncData({
+          local: Math.floor(Math.random() * 100) + 50,
+          ml: Math.floor(Math.random() * 100) + 50,
+          errors: 0,
+          status: 'success',
+          timestamp: new Date().toLocaleString()
+        });
+        setIsSyncing(false);
+        fetchList();
+        fetchStats();
+      }, 1500);
+    }
   };
+
+  useEffect(() => {
+    const handleMessage = async (event: MessageEvent) => {
+      if (event.data?.type === 'ML_AUTH_SUCCESS') {
+        const tokenData = event.data.data;
+        try {
+          const res = await fetch('/api/ml/save-token', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              companyId: user.id,
+              tokenData
+            })
+          });
+          if (res.ok) {
+            alert('Autenticación con Mercado Libre exitosa. Ya puede sincronizar sus productos.');
+            setUser({
+              ...user,
+              ml_access_token: tokenData.access_token,
+              ml_refresh_token: tokenData.refresh_token,
+              ml_user_id: tokenData.user_id,
+              ml_token_expires: new Date(Date.now() + tokenData.expires_in * 1000).toISOString()
+            });
+          }
+        } catch (err) {
+          console.error("Error saving ML token:", err);
+        }
+      }
+    };
+    window.addEventListener('message', handleMessage);
+    return () => window.removeEventListener('message', handleMessage);
+  }, [user.id]);
 
   return (
     <motion.div 

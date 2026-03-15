@@ -1,0 +1,5 @@
+{
+  "name": "MLSync",
+  "description": "Sincronizador de información entre Mercado Libre y sistemas locales de facturación.",
+  "requestFramePermissions": []
+}

@@ -946,13 +946,13 @@ function CompanyView({ activeTab, user, setUser }: any) {
         // Map columns: assuming itm_cod and itm_desc are in the Excel
         const products = jsonData.map((row: any) => {
           // Find code column
-          const code = row.itm_cod || row.Código || row.codigo || row.Code || row.code || row['CÓDIGO'] || row['Codigo'] || '';
+          const code = row.itm_cod || row.Código || row.codigo || row.Code || row.code || row['CÓDIGO'] || row['Codigo'] || row['Item Code'] || '';
           // Find name column
-          const name = row.itm_desc || row.Descripción || row.descripcion || row.Description || row.description || row['DESCRIPCIÓN'] || row['Descripcion'] || '';
+          const name = row.itm_desc || row.Descripción || row.descripcion || row.Description || row.description || row['DESCRIPCIÓN'] || row['Descripcion'] || row['Item Description'] || '';
           // Find price column
-          const price = row.Precio || row.precio || row.Price || row.price || row['PRECIO'] || 0;
+          const price = row.Precio || row.precio || row.Price || row.price || row['PRECIO'] || row['itm_prec'] || 0;
           // Find stock column
-          const stock = row.Stock || row.stock || row['STOCK'] || 0;
+          const stock = row.Stock || row.stock || row['STOCK'] || row['itm_stoc'] || 0;
           // Find category column
           const category = row.Categoria || row.categoria || row.Category || row.category || row['CATEGORÍA'] || 'MLA1652';
           // Find image column
@@ -971,7 +971,9 @@ function CompanyView({ activeTab, user, setUser }: any) {
         console.log("Mapped products:", products);
 
         if (products.length === 0) {
-          alert("No se encontraron productos válidos en el Excel. Verifique que las columnas itm_cod e itm_desc (o similares) existan.");
+          const firstRow = jsonData[0] || {};
+          const columns = Object.keys(firstRow).join(', ');
+          alert(`No se encontraron productos válidos. Verifique que las columnas itm_cod e itm_desc (o similares) existan.\n\nColumnas detectadas: ${columns}`);
         } else {
           setListData(products);
           setSelectedItems(new Set());
@@ -1089,6 +1091,7 @@ function CompanyView({ activeTab, user, setUser }: any) {
       if (activeTab === 'products') endpoint = `/api/products?companyId=${user.id}`;
       if (activeTab === 'clients') endpoint = `/api/clients?companyId=${user.id}`;
       if (activeTab === 'invoices') endpoint = `/api/invoices?companyId=${user.id}`;
+      if (activeTab === 'prices') endpoint = `/api/ml/items?companyId=${user.id}`;
       
       if (endpoint) {
         const res = await fetch(endpoint);
@@ -1155,13 +1158,78 @@ function CompanyView({ activeTab, user, setUser }: any) {
     }
   };
 
+  const handleDatUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    const reader = new FileReader();
+    reader.onload = async (evt) => {
+      const content = evt.target?.result as string;
+      const base64 = btoa(content);
+      
+      try {
+        const res = await fetch('/api/parse-odbc', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ fileContent: base64 })
+        });
+        const data = await res.json();
+        if (data.success) {
+          if (activeTab === 'prices') {
+            // Merge with existing ML items
+            setListData(prev => {
+              const newList = [...prev];
+              let matches = 0;
+              data.products.forEach((datProd: any) => {
+                const index = newList.findIndex(item => item.code === datProd.code);
+                if (index !== -1) {
+                  newList[index] = { 
+                    ...newList[index], 
+                    price: datProd.price > 0 ? datProd.price : newList[index].price 
+                  };
+                  matches++;
+                  // Auto-select for sync
+                  setSelectedItems(prevSelect => {
+                    const next = new Set(prevSelect);
+                    next.add(newList[index].code);
+                    return next;
+                  });
+                }
+              });
+              alert(`Se actualizaron precios para ${matches} productos coincidentes.`);
+              return newList;
+            });
+          } else {
+            setListData(data.products);
+            setSelectedItems(new Set());
+            alert(`Se cargaron ${data.products.length} productos desde el archivo .dat`);
+          }
+        }
+      } catch (err) {
+        alert('Error al procesar el archivo .dat');
+      }
+    };
+    reader.readAsBinaryString(file);
+  };
+
+  const handlePriceChange = (code: string, newPrice: number) => {
+    setListData(prev => prev.map(item => 
+      item.code === code ? { ...item, price: newPrice } : item
+    ));
+    if (!selectedItems.has(code)) {
+      const newSelection = new Set(selectedItems);
+      newSelection.add(code);
+      setSelectedItems(newSelection);
+    }
+  };
+
   const handleSync = async () => {
-    if (activeTab === 'products' && selectedItems.size === 0) {
+    if ((activeTab === 'products' || activeTab === 'prices') && selectedItems.size === 0) {
       alert('Por favor seleccione al menos un item para sincronizar.');
       return;
     }
 
-    if (activeTab === 'products') {
+    if (activeTab === 'products' || activeTab === 'prices') {
       // Check if we have ML token
       if (!user.ml_access_token) {
         // Start OAuth flow
@@ -1291,16 +1359,27 @@ function CompanyView({ activeTab, user, setUser }: any) {
               <div className="flex items-center justify-between mb-8">
                 <h3 className="text-xl font-bold text-slate-800 flex items-center gap-2">
                   <Upload size={24} className="text-yellow-500" />
-                  {activeTab === 'products' ? 'Inventario de Productos (ODBC)' : 
+                  {activeTab === 'prices' ? 'Actualización de Precios (ML)' :
+                   activeTab === 'products' ? 'Inventario de Productos (ODBC)' : 
                    activeTab === 'clients' ? 'Mis Clientes' : 'Facturación'}
                 </h3>
                 <div className="flex items-center gap-3">
-                  {activeTab === 'products' && (
-                    <label className="px-4 py-2 bg-yellow-400 text-slate-900 rounded-lg text-xs font-bold hover:bg-yellow-500 transition-all flex items-center gap-2 cursor-pointer">
+                  {activeTab === 'prices' && (
+                    <label className="px-4 py-2 bg-slate-900 text-white rounded-lg text-xs font-bold hover:bg-slate-800 transition-all flex items-center gap-2 cursor-pointer">
                       <Upload size={14} />
-                      IMPORTAR EXCEL DISCV
-                      <input type="file" accept=".xlsx, .xls" className="hidden" onChange={handleExcelImport} />
+                      CARGAR .DAT (ODBC)
+                      <input type="file" accept=".dat" className="hidden" onChange={handleDatUpload} />
                     </label>
+                  )}
+                  {activeTab === 'products' && (
+                    <div className="flex flex-col items-end gap-1">
+                      <label className="px-4 py-2 bg-yellow-400 text-slate-900 rounded-lg text-xs font-bold hover:bg-yellow-500 transition-all flex items-center gap-2 cursor-pointer">
+                        <Upload size={14} />
+                        IMPORTAR EXCEL DISCV
+                        <input type="file" accept=".xlsx, .xls" className="hidden" onChange={handleExcelImport} />
+                      </label>
+                      <span className="text-[8px] text-slate-400 font-bold">Columnas: itm_cod, itm_desc, Precio, Stock</span>
+                    </div>
                   )}
                   {activeTab === 'clients' && (
                     <>
@@ -1346,7 +1425,7 @@ function CompanyView({ activeTab, user, setUser }: any) {
                       }`}
                     >
                       <div className="flex items-center gap-4">
-                        {activeTab === 'products' && (
+                        {(activeTab === 'products' || activeTab === 'prices') && (
                           <div className={`w-5 h-5 rounded border flex items-center justify-center transition-colors ${
                             selectedItems.has(item.code) ? 'bg-yellow-400 border-yellow-400' : 'border-slate-300 bg-white'
                           }`}>
@@ -1356,16 +1435,28 @@ function CompanyView({ activeTab, user, setUser }: any) {
                         <div>
                           <div className="font-bold text-slate-800">{item.name || item.number}</div>
                           <div className="text-xs text-slate-400 font-medium">
-                            {activeTab === 'products' ? `Código: ${item.code}` :
+                            {activeTab === 'products' || activeTab === 'prices' ? `Código: ${item.code}` :
                              activeTab === 'clients' ? item.email : `Total: $${item.total}`}
                           </div>
                         </div>
                       </div>
-                      <div className="flex items-center gap-4">
+                      <div className="flex items-center gap-6">
+                        {activeTab === 'prices' && (
+                          <div className="flex items-center gap-2">
+                            <span className="text-xs font-bold text-slate-400">$</span>
+                            <input 
+                              type="number"
+                              value={item.price}
+                              onChange={(e) => handlePriceChange(item.code, Number(e.target.value))}
+                              className="w-24 p-1 text-sm font-bold border border-slate-200 rounded focus:ring-1 focus:ring-yellow-400 outline-none"
+                            />
+                          </div>
+                        )}
                         <div className="text-xs font-black text-slate-300">
-                          {item.created_at ? new Date(item.created_at).toLocaleDateString() : 'Lectura Local'}
+                          {activeTab === 'prices' ? (item.last_updated ? new Date(item.last_updated).toLocaleString() : 'Pendiente') :
+                           (item.created_at ? new Date(item.created_at).toLocaleDateString() : 'Lectura Local')}
                         </div>
-                        {activeTab !== 'products' && (
+                        {activeTab !== 'products' && activeTab !== 'prices' && (
                           <button 
                             onClick={(e) => { e.stopPropagation(); handleDeleteItem(item.id); }}
                             className="p-2 text-rose-400 hover:text-rose-600 opacity-0 group-hover:opacity-100 transition-all"

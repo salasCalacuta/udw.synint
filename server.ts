@@ -301,31 +301,32 @@ async function startServer() {
 
       const results = [];
       for (const item of items) {
-        // Mapping as requested:
-        // SKU -> seller_custom_field
-        // Nombre -> title
-        // Precio -> price
-        // Stock -> available_quantity
-        // Categoría -> category_id (defaulting to MLA1652 if not provided)
-        // Imágenes -> pictures
-
-        const mlItem = {
+        const isUpdate = !!item.id && item.id.startsWith('MLA');
+        
+        const mlItem: any = {
           title: item.name,
-          category_id: item.category_id || "MLA1652",
           price: Number(item.price),
-          currency_id: "ARS",
           available_quantity: Number(item.stock),
-          buying_mode: "buy_it_now",
-          listing_type_id: "gold_special",
-          condition: "new",
           seller_custom_field: item.code,
-          pictures: item.pictures || [
-            { source: "https://picsum.photos/seed/product/800/600" }
-          ]
         };
 
-        const response = await fetch("https://api.mercadolibre.com/items", {
-          method: "POST",
+        if (!isUpdate) {
+          mlItem.category_id = item.category_id || "MLA1652";
+          mlItem.currency_id = "ARS";
+          mlItem.buying_mode = "buy_it_now";
+          mlItem.listing_type_id = "gold_special";
+          mlItem.condition = "new";
+          mlItem.pictures = item.pictures || [
+            { source: "https://picsum.photos/seed/product/800/600" }
+          ];
+        }
+
+        const url = isUpdate 
+          ? `https://api.mercadolibre.com/items/${item.id}`
+          : "https://api.mercadolibre.com/items";
+        
+        const response = await fetch(url, {
+          method: isUpdate ? "PUT" : "POST",
           headers: {
             "Authorization": `Bearer ${company.ml_access_token}`,
             "Content-Type": "application/json"
@@ -335,15 +336,13 @@ async function startServer() {
 
         const data = await response.json();
         if (data.id) {
-          // Save item_id to database
-          // Assuming we update the product in our local 'products' table if it exists
-          // Or just return it. The prompt says "guardarlo en la base de datos: producto_id_local -> item_id_mercadolibre"
-          
-          await supabase
-            .from('products')
-            .update({ ml_item_id: data.id })
-            .eq('code', item.code)
-            .eq('company_id', companyId);
+          if (!isUpdate) {
+            await supabase
+              .from('products')
+              .update({ ml_item_id: data.id })
+              .eq('code', item.code)
+              .eq('company_id', companyId);
+          }
 
           results.push({ code: item.code, ml_id: data.id, status: 'success' });
         } else {
@@ -566,6 +565,51 @@ async function startServer() {
     }
   });
 
+  app.get("/api/ml/items", async (req, res) => {
+    const { companyId } = req.query;
+    try {
+      const { data: company, error: compError } = await supabase
+        .from('companies')
+        .select('*')
+        .eq('id', companyId)
+        .single();
+
+      if (compError || !company) throw new Error("Empresa no encontrada");
+      if (!company.ml_access_token || !company.ml_user_id) throw new Error("No autorizado en Mercado Libre");
+
+      // Fetch items IDs for the user
+      const searchRes = await fetch(`https://api.mercadolibre.com/users/${company.ml_user_id}/items/search`, {
+        headers: { "Authorization": `Bearer ${company.ml_access_token}` }
+      });
+      const searchData = await searchRes.json();
+      
+      if (!searchData.results || searchData.results.length === 0) {
+        return res.json([]);
+      }
+
+      // Fetch details for each item
+      const ids = searchData.results.slice(0, 50).join(','); // Limit to 50 for now
+      const itemsRes = await fetch(`https://api.mercadolibre.com/items?ids=${ids}`, {
+        headers: { "Authorization": `Bearer ${company.ml_access_token}` }
+      });
+      const itemsData = await itemsRes.json();
+
+      const products = itemsData.map((item: any) => ({
+        id: item.body.id,
+        code: item.body.seller_custom_field || item.body.id,
+        name: item.body.title,
+        price: item.body.price,
+        stock: item.body.available_quantity,
+        last_updated: item.body.last_updated || new Date().toISOString()
+      }));
+
+      res.json(products);
+    } catch (err: any) {
+      console.error("Error fetching ML items:", err);
+      res.status(500).json({ error: err.message });
+    }
+  });
+
   // ODBC Parser (Simulated for .dat file upload)
   app.post("/api/parse-odbc", (req, res) => {
     const { fileContent } = req.body; // Base64 or string
@@ -589,12 +633,16 @@ async function startServer() {
         if (line.length > 50) {
           const itm_cod = line.substring(0, 13).trim();
           const itm_desc = line.substring(13, 53).trim();
+          // Try to find a price at the end of the line or specific position
+          // Assuming price might be in the last 10 characters
+          const priceStr = line.substring(line.length - 10).trim().replace(',', '.');
+          const price = parseFloat(priceStr) || 0;
           
-          if (itm_cod && itm_desc && !isNaN(Number(itm_cod))) {
+          if (itm_cod && itm_desc) {
             products.push({
               code: itm_cod,
               name: itm_desc,
-              price: 0,
+              price: price,
               stock: 0
             });
           }

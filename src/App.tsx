@@ -19,6 +19,7 @@ import {
   Edit,
   Trash2,
   RefreshCw,
+  Settings,
   Activity
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
@@ -600,6 +601,12 @@ export default function App() {
                 onClick={() => setActiveTab('invoices')} 
               />
               <SidebarItem 
+                icon={<Settings size={20} />} 
+                label="Configuración" 
+                active={activeTab === 'settings'} 
+                onClick={() => setActiveTab('settings')} 
+              />
+              <SidebarItem 
                 icon={<FileType size={20} />} 
                 label="PDFs" 
                 active={activeTab === 'pdf'} 
@@ -724,7 +731,7 @@ export default function App() {
                       value={newCompany.password}
                       onChange={e => setNewCompany({...newCompany, password: e.target.value})}
                     />
-                    <div className="grid grid-cols-3 gap-4">
+                    <div className="grid grid-cols-2 gap-4">
                       <div>
                         <label className="text-[10px] font-bold text-slate-400 ml-1">Monto Abono</label>
                         <input 
@@ -740,16 +747,6 @@ export default function App() {
                               debt: amount - newCompany.payments
                             });
                           }}
-                        />
-                      </div>
-                      <div>
-                        <label className="text-[10px] font-bold text-slate-400 ml-1">Deuda</label>
-                        <input 
-                          type="number"
-                          placeholder="0.00" 
-                          className="w-full p-3 rounded-lg border border-slate-200 focus:ring-2 focus:ring-yellow-400 outline-none bg-slate-50"
-                          value={newCompany.debt}
-                          readOnly
                         />
                       </div>
                       <div>
@@ -1431,18 +1428,19 @@ function CompanyView({ activeTab, user, setUser }: any) {
         });
         const data = await res.json();
         
+        const successCount = data.results ? data.results.filter((r: any) => r.status === 'success').length : 0;
+        const errorCount = data.results ? data.results.filter((r: any) => r.status === 'error').length : 0;
+        
+        setSyncData({
+          local: itemsToSync.length,
+          ml: successCount,
+          errors: errorCount,
+          status: data.success ? 'success' : 'error',
+          results: data.results || [],
+          timestamp: new Date().toLocaleString()
+        });
+        
         if (data.success) {
-          const successCount = data.results.filter((r: any) => r.status === 'success').length;
-          const errorCount = data.results.filter((r: any) => r.status === 'error').length;
-          
-          setSyncData({
-            local: itemsToSync.length,
-            ml: successCount,
-            errors: errorCount,
-            status: 'success',
-            timestamp: new Date().toLocaleString()
-          });
-          
           alert(`Sincronización finalizada. Éxitos: ${successCount}, Errores: ${errorCount}`);
           fetchList();
           fetchStats();
@@ -1747,6 +1745,84 @@ function CompanyView({ activeTab, user, setUser }: any) {
               </motion.div>
             )}
 
+            {activeTab === 'settings' && (
+              <motion.div 
+                initial={{ opacity: 0, y: 20 }}
+                animate={{ opacity: 1, y: 0 }}
+                className="bg-white p-8 rounded-2xl shadow-xl border border-slate-100"
+              >
+                <h3 className="text-xl font-bold text-slate-800 mb-6 flex items-center gap-2">
+                  <Settings size={24} className="text-slate-600" />
+                  Configuración de Mercado Libre
+                </h3>
+                <div className="p-6 bg-slate-50 rounded-2xl border border-slate-100">
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <h4 className="font-bold text-slate-800">Estado de la Integración</h4>
+                      <p className="text-sm text-slate-500 mt-1">
+                        {user.ml_access_token 
+                          ? `Vinculado con Mercado Libre (ID: ${user.ml_user_id})` 
+                          : 'No se ha vinculado ninguna cuenta de Mercado Libre'}
+                      </p>
+                      {user.ml_token_expires && (
+                        <p className="text-[10px] font-bold text-slate-400 uppercase mt-2">
+                          Expira: {new Date(user.ml_token_expires).toLocaleString()}
+                        </p>
+                      )}
+                    </div>
+                    <button 
+                      onClick={() => {
+                        // Force OAuth flow
+                        const startOAuth = async () => {
+                          try {
+                            const res = await fetch(`/api/ml/auth-url?companyId=${user.id}`);
+                            const data = await res.json();
+                            if (data.url) {
+                              window.open(data.url, 'ML_AUTH', 'width=600,height=600');
+                            }
+                          } catch (err) {
+                            alert('Error al iniciar autenticación');
+                          }
+                        };
+                        startOAuth();
+                      }}
+                      className="px-6 py-3 bg-yellow-400 text-slate-900 font-black rounded-xl hover:bg-yellow-500 transition-all shadow-lg shadow-yellow-400/20"
+                    >
+                      {user.ml_access_token ? 'REFRESCAR CONEXIÓN' : 'VINCULAR CUENTA'}
+                    </button>
+                  </div>
+                </div>
+                
+                <div className="mt-8 grid grid-cols-1 md:grid-cols-2 gap-6">
+                  <div className="p-6 border border-slate-100 rounded-2xl">
+                    <h4 className="font-bold text-slate-800 mb-4">Credenciales API</h4>
+                    <div className="space-y-4">
+                      <div>
+                        <label className="text-[10px] font-black text-slate-400 uppercase">Client ID</label>
+                        <div className="p-3 bg-slate-50 rounded-lg text-xs font-mono text-slate-600 truncate">
+                          {user.ml_client_id || 'No configurado'}
+                        </div>
+                      </div>
+                      <div>
+                        <label className="text-[10px] font-black text-slate-400 uppercase">Callback URL</label>
+                        <div className="p-3 bg-slate-50 rounded-lg text-xs font-mono text-slate-600 truncate">
+                          {user.ml_callback_url || 'No configurado'}
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                  
+                  <div className="p-6 border border-slate-100 rounded-2xl bg-blue-50/30">
+                    <h4 className="font-bold text-blue-800 mb-2">Ayuda</h4>
+                    <p className="text-sm text-blue-600 leading-relaxed">
+                      Si experimenta problemas con la sincronización de precios o stock, intente refrescar la conexión. 
+                      Esto renovará los permisos de acceso a su cuenta de Mercado Libre.
+                    </p>
+                  </div>
+                </div>
+              </motion.div>
+            )}
+
             {activeTab === 'pdf' && (
               <motion.div 
                 initial={{ opacity: 0, y: 20 }}
@@ -1812,6 +1888,31 @@ function CompanyView({ activeTab, user, setUser }: any) {
                   <CheckCircle2 size={20} />
                   Sincronización finalizada con éxito el {syncData.timestamp}
                 </div>
+
+                {syncData.results && syncData.results.length > 0 && (
+                  <div className="mt-6 border-t border-slate-100 pt-6">
+                    <h4 className="text-sm font-black text-slate-800 uppercase mb-4">Detalle de Sincronización</h4>
+                    <div className="max-h-60 overflow-y-auto space-y-2 pr-2 custom-scrollbar">
+                      {syncData.results.map((result: any, idx: number) => (
+                        <div key={idx} className={`flex items-center justify-between p-3 rounded-lg border ${result.status === 'success' ? 'bg-green-50/50 border-green-100' : 'bg-red-50/50 border-red-100'}`}>
+                          <div className="flex items-center gap-3">
+                            <div className={`w-8 h-8 rounded-full flex items-center justify-center ${result.status === 'success' ? 'bg-green-100 text-green-600' : 'bg-red-100 text-red-600'}`}>
+                              {result.status === 'success' ? <CheckCircle2 size={16} /> : <AlertCircle size={16} />}
+                            </div>
+                            <div>
+                              <div className="text-xs font-bold text-slate-700">{result.code}</div>
+                              {result.ml_id && <div className="text-[10px] text-slate-400">ML ID: {result.ml_id}</div>}
+                              {result.error && <div className="text-[10px] text-red-500 font-medium">{result.error}</div>}
+                            </div>
+                          </div>
+                          <div className={`text-[10px] font-black uppercase px-2 py-1 rounded ${result.status === 'success' ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700'}`}>
+                            {result.status === 'success' ? 'Éxito' : 'Error'}
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
               </motion.div>
             )}
           </div>

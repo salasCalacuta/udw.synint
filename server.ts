@@ -314,6 +314,7 @@ async function startServer() {
 
   app.post("/api/ml/sync-items", async (req, res) => {
     const { companyId, items } = req.body;
+    const results: any[] = [];
     try {
       const { data: company, error: compError } = await supabase
         .from('companies')
@@ -324,11 +325,13 @@ async function startServer() {
       if (compError || !company) throw new Error("Empresa no encontrada");
       if (!company.ml_access_token) throw new Error("No autorizado en Mercado Libre");
 
-      const results = [];
       for (const item of items) {
         const isUpdate = !!item.id && item.id.startsWith('MLA');
         
-        const mlItem: any = {
+        const mlItem: any = isUpdate ? {
+          price: Number(item.price),
+          available_quantity: Number(item.stock),
+        } : {
           title: item.name,
           price: Number(item.price),
           available_quantity: Number(item.stock),
@@ -377,7 +380,12 @@ async function startServer() {
 
       res.json({ success: true, results });
     } catch (err: any) {
-      res.status(500).json({ success: false, message: err.message });
+      console.error("Error in sync-items:", err);
+      res.status(500).json({ 
+        success: false, 
+        message: err.message,
+        results: results || [] 
+      });
     }
   });
 

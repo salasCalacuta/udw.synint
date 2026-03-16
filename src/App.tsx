@@ -76,6 +76,31 @@ export default function App() {
   });
 
   const [editingCompany, setEditingCompany] = useState<Company | null>(null);
+  const [dbConnected, setDbConnected] = useState<boolean | null>(null);
+  const [dbError, setDbError] = useState<string>('');
+  const [isCheckingDb, setIsCheckingDb] = useState(true);
+
+  // Check DB Connection
+  useEffect(() => {
+    const checkDb = async () => {
+      try {
+        const res = await fetch('/api/health-check');
+        const data = await res.json();
+        if (data.success) {
+          setDbConnected(true);
+        } else {
+          setDbConnected(false);
+          setDbError(data.message || 'Error de configuración de base de datos');
+        }
+      } catch (err) {
+        setDbConnected(false);
+        setDbError('No se pudo conectar con el servidor backend');
+      } finally {
+        setIsCheckingDb(false);
+      }
+    };
+    checkDb();
+  }, []);
 
   // Single Session Check
   useEffect(() => {
@@ -111,6 +136,15 @@ export default function App() {
       fetchCompanies();
     }
   }, [role]);
+
+  useEffect(() => {
+    const amount = Number(newCompany.amount) || 0;
+    const payments = Number(newCompany.payments) || 0;
+    const calculatedDebt = amount - payments;
+    if (newCompany.debt !== calculatedDebt) {
+      setNewCompany(prev => ({ ...prev, debt: calculatedDebt }));
+    }
+  }, [newCompany.amount, newCompany.payments]);
 
   const fetchCompanies = async () => {
     try {
@@ -291,6 +325,64 @@ export default function App() {
     setPassword('');
     setActiveTab('dashboard');
   };
+
+  if (isCheckingDb) {
+    return (
+      <div className="min-h-screen bg-slate-900 flex items-center justify-center">
+        <div className="text-center">
+          <div className="w-12 h-12 border-4 border-blue-500 border-t-transparent rounded-full animate-spin mx-auto mb-4"></div>
+          <p className="text-blue-400 font-bold animate-pulse">VERIFICANDO SISTEMA...</p>
+        </div>
+      </div>
+    );
+  }
+
+  if (dbConnected === false) {
+    return (
+      <div className="min-h-screen bg-slate-950 flex items-center justify-center p-6">
+        <motion.div 
+          initial={{ scale: 0.9, opacity: 0 }}
+          animate={{ scale: 1, opacity: 1 }}
+          className="max-w-md w-full bg-red-950/20 border border-red-500/30 rounded-3xl p-10 text-center backdrop-blur-xl"
+        >
+          <div className="w-20 h-20 bg-red-500/20 text-red-500 rounded-full flex items-center justify-center mx-auto mb-6">
+            <AlertCircle size={40} />
+          </div>
+          <h1 className="text-2xl font-black text-white mb-4 uppercase tracking-tight">Error de Configuración</h1>
+          <p className="text-red-200/70 mb-8 font-medium leading-relaxed">
+            {dbError || "No se pudo establecer conexión con la base de datos Supabase."}
+          </p>
+          <div className="bg-black/40 rounded-2xl p-6 text-left mb-8 border border-white/5">
+            <p className="text-[10px] font-black text-red-400 uppercase tracking-widest mb-3">Pasos para solucionar:</p>
+            <ul className="text-xs text-slate-400 space-y-3 font-medium">
+              <li className="flex gap-2">
+                <span className="text-red-500 font-bold">1.</span>
+                <span>Ve al panel de <b>Secrets</b> en AI Studio.</span>
+              </li>
+              <li className="flex gap-2">
+                <span className="text-red-500 font-bold">2.</span>
+                <span>Agrega <b>SUPABASE_URL</b> con la URL de tu proyecto.</span>
+              </li>
+              <li className="flex gap-2">
+                <span className="text-red-500 font-bold">3.</span>
+                <span>Agrega <b>SUPABASE_ANON_KEY</b> con tu clave anon.</span>
+              </li>
+              <li className="flex gap-2">
+                <span className="text-red-500 font-bold">4.</span>
+                <span>Reinicia la aplicación.</span>
+              </li>
+            </ul>
+          </div>
+          <button 
+            onClick={() => window.location.reload()}
+            className="w-full py-4 bg-white text-black font-black rounded-xl hover:bg-slate-200 transition-all uppercase tracking-widest text-sm"
+          >
+            Reintentar Conexión
+          </button>
+        </motion.div>
+      </div>
+    );
+  }
 
   if (!role) {
     if (loginView === 'admin') {
@@ -1044,32 +1136,63 @@ function CompanyView({ activeTab, user, setUser }: any) {
 
     const reader = new FileReader();
     reader.onload = (evt) => {
-      const bstr = evt.target?.result;
-      const wb = XLSX.read(bstr, { type: 'binary' });
-      const wsname = wb.SheetNames[0];
-      const ws = wb.Sheets[wsname];
-      const data = XLSX.utils.sheet_to_json(ws);
-      
-      console.log("Excel data parsed:", data);
-      
-      // Mock sync to backend
-      fetch('/api/sync/excel', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          type: activeTab === 'products' ? 'products' : 'clients',
-          data: data,
-          companyId: user.id
-        })
-      }).then(res => {
-        if (res.ok) {
-          alert('Datos cargados correctamente desde Excel');
-          fetchList();
-          fetchStats();
+      try {
+        const data = new Uint8Array(evt.target?.result as ArrayBuffer);
+        const wb = XLSX.read(data, { type: 'array' });
+        const wsname = wb.SheetNames[0];
+        const ws = wb.Sheets[wsname];
+        const jsonData = XLSX.utils.sheet_to_json(ws);
+        
+        console.log("Client Excel data parsed:", jsonData);
+        
+        const mappedClients = jsonData.map((row: any) => {
+          const codigo = row.codigo || row.Codigo || row.Código || row.code || '';
+          const nombre = row.nombre || row.Nombre || row.name || '';
+          const direccion = row.direccion || row.Direccion || row.Dirección || row.address || '';
+          const localidad = row.localidad || row.Localidad || row.city || '';
+          const telefono = row.telefono || row.Telefono || row.phone || '';
+          const mail = row.mail || row.Mail || row.email || row.Email || '';
+          
+          return {
+            codigo,
+            nombre,
+            direccion,
+            localidad,
+            telefono,
+            mail,
+            email: mail, // For UI consistency
+            company_id: user.id
+          };
+        }).filter(c => c.nombre || c.mail);
+
+        if (mappedClients.length === 0) {
+          alert("No se encontraron clientes válidos en el archivo.");
+          return;
         }
-      });
+
+        fetch('/api/sync/excel', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            type: 'clients',
+            data: mappedClients,
+            companyId: user.id
+          })
+        }).then(res => {
+          if (res.ok) {
+            alert(`Se importaron ${mappedClients.length} clientes correctamente.`);
+            fetchList();
+            fetchStats();
+          } else {
+            alert("Error al sincronizar con el servidor.");
+          }
+        });
+      } catch (err) {
+        console.error("Error parsing Client Excel:", err);
+        alert("Error al procesar el archivo Excel.");
+      }
     };
-    reader.readAsBinaryString(file);
+    reader.readAsArrayBuffer(file);
   };
 
   const downloadMLSales = async () => {
@@ -1492,10 +1615,10 @@ function CompanyView({ activeTab, user, setUser }: any) {
                           </div>
                         )}
                         <div>
-                          <div className="font-bold text-slate-800">{item.name || item.number}</div>
+                          <div className="font-bold text-slate-800">{item.name || item.nombre || item.number}</div>
                           <div className="text-xs text-slate-400 font-medium flex items-center gap-2">
-                            {activeTab === 'products' || activeTab === 'prices' ? `Código: ${item.code}` :
-                             activeTab === 'clients' ? item.email : `Total: $${item.total}`}
+                            {activeTab === 'products' || activeTab === 'prices' ? `Código: ${item.code || item.codigo}` :
+                             activeTab === 'clients' ? `${item.email || item.mail || 'Sin Email'} | ${item.localidad || 'Sin Localidad'}` : `Total: $${item.total}`}
                             {activeTab === 'products' && item.ml_item_id && (
                               <span className="px-1.5 py-0.5 bg-green-100 text-green-600 rounded text-[8px] font-black uppercase">Sincronizado ML</span>
                             )}
@@ -1742,14 +1865,34 @@ function CompanyView({ activeTab, user, setUser }: any) {
               {activeTab === 'clients' && (
                 <>
                   <input 
-                    placeholder="Nombre del Cliente" 
+                    placeholder="Código de Cliente" 
                     className="w-full p-3 rounded-lg border border-slate-200"
-                    onChange={e => setNewItem({...newItem, name: e.target.value})}
+                    onChange={e => setNewItem({...newItem, codigo: e.target.value})}
                   />
                   <input 
-                    placeholder="Email" 
+                    placeholder="Nombre del Cliente" 
                     className="w-full p-3 rounded-lg border border-slate-200"
-                    onChange={e => setNewItem({...newItem, email: e.target.value})}
+                    onChange={e => setNewItem({...newItem, nombre: e.target.value})}
+                  />
+                  <input 
+                    placeholder="Email / Mail" 
+                    className="w-full p-3 rounded-lg border border-slate-200"
+                    onChange={e => setNewItem({...newItem, mail: e.target.value})}
+                  />
+                  <input 
+                    placeholder="Dirección" 
+                    className="w-full p-3 rounded-lg border border-slate-200"
+                    onChange={e => setNewItem({...newItem, direccion: e.target.value})}
+                  />
+                  <input 
+                    placeholder="Localidad" 
+                    className="w-full p-3 rounded-lg border border-slate-200"
+                    onChange={e => setNewItem({...newItem, localidad: e.target.value})}
+                  />
+                  <input 
+                    placeholder="Teléfono" 
+                    className="w-full p-3 rounded-lg border border-slate-200"
+                    onChange={e => setNewItem({...newItem, telefono: e.target.value})}
                   />
                 </>
               )}

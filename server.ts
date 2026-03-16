@@ -20,24 +20,30 @@ const isValidUrl = (url: string) => {
   }
 };
 
-if (!supabaseUrl || !supabaseKey || 
-    supabaseUrl.includes("your-project-id") || 
-    supabaseUrl.includes("YOUR_SUPABASE_URL") || 
-    supabaseKey.includes("your-anon-key") || 
-    supabaseKey.includes("YOUR_SUPABASE_ANON_KEY") || 
-    !isValidUrl(supabaseUrl)) {
+const isConfigValid = supabaseUrl && supabaseKey && 
+    !supabaseUrl.includes("your-project-id") && 
+    !supabaseUrl.includes("YOUR_SUPABASE_URL") && 
+    !supabaseKey.includes("your-anon-key") && 
+    !supabaseKey.includes("YOUR_SUPABASE_ANON_KEY") && 
+    isValidUrl(supabaseUrl);
+
+if (!isConfigValid) {
   console.error("************************************************************");
   console.error("ERROR CRÍTICO: Configuración de Supabase inválida o faltante.");
   console.error("Asegúrate de configurar SUPABASE_URL y SUPABASE_ANON_KEY");
   console.error("en el panel de Secrets de AI Studio.");
   console.error("URL actual:", supabaseUrl || "(vacío)");
   console.error("************************************************************");
-} else {
-  try {
+}
+
+try {
+  // Initialize even if config is invalid to avoid "undefined" errors, 
+  // but only if URL is somewhat valid for createClient
+  if (isValidUrl(supabaseUrl)) {
     supabase = createClient(supabaseUrl, supabaseKey);
-  } catch (err: any) {
-    console.error("Error al inicializar Supabase:", err.message);
   }
+} catch (err: any) {
+  console.error("Error al inicializar Supabase:", err.message);
 }
 
 async function startServer() {
@@ -46,17 +52,36 @@ async function startServer() {
 
   app.use(express.json());
 
+  // Middleware to check if Supabase is initialized
+  app.use("/api", (req, res, next) => {
+    if (!supabase) {
+      return res.status(503).json({ 
+        success: false, 
+        message: "Servicio de base de datos no disponible. Verifica la configuración de Supabase (URL y Key)." 
+      });
+    }
+    next();
+  });
+
   // API Routes
   app.get("/api/health-check", async (req, res) => {
     try {
-      if (!supabaseUrl || !supabaseKey) {
-        return res.status(500).json({ success: false, message: "Variables de entorno SUPABASE_URL o SUPABASE_ANON_KEY no configuradas en Secrets." });
-      }
+      // The middleware already ensures supabase is defined
       const { data, error } = await supabase.from('companies').select('count', { count: 'exact', head: true });
-      if (error) throw error;
-      res.json({ success: true, message: "Conexión con Supabase establecida correctamente." });
+      if (error) {
+        return res.status(500).json({ 
+          success: false, 
+          message: "Error al consultar Supabase: " + error.message,
+          details: error 
+        });
+      }
+      res.json({ 
+        success: true, 
+        message: "Conexión con Supabase establecida correctamente.",
+        configValid: isConfigValid
+      });
     } catch (err: any) {
-      res.status(500).json({ success: false, message: "Error al conectar con Supabase: " + err.message });
+      res.status(500).json({ success: false, message: "Error inesperado al conectar con Supabase: " + err.message });
     }
   });
 
@@ -204,7 +229,7 @@ async function startServer() {
       }
 
       const clientId = company.ml_client_id || process.env.ML_CLIENT_ID;
-      const redirectUri = company.ml_callback_url || `${req.protocol}://${req.get('host')}/api/ml/callback`;
+      const redirectUri = company.ml_callback_url || `${process.env.APP_URL}/api/ml/callback`;
       
       const authUrl = `https://auth.mercadolibre.com.ar/authorization?response_type=code&client_id=${clientId}&redirect_uri=${encodeURIComponent(redirectUri)}&state=${companyId}`;
       res.json({ url: authUrl });
@@ -230,7 +255,7 @@ async function startServer() {
 
       const clientId = company.ml_client_id || process.env.ML_CLIENT_ID;
       const clientSecret = company.ml_client_secret || process.env.ML_CLIENT_SECRET;
-      const redirectUri = company.ml_callback_url || `${req.protocol}://${req.get('host')}/api/ml/callback`;
+      const redirectUri = company.ml_callback_url || `${process.env.APP_URL}/api/ml/callback`;
 
       const response = await fetch("https://api.mercadolibre.com/oauth/token", {
         method: "POST",

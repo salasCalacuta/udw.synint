@@ -640,7 +640,14 @@ export default function App() {
                           placeholder="0.00" 
                           className="w-full p-3 rounded-lg border border-slate-200 focus:ring-2 focus:ring-yellow-400 outline-none"
                           value={newCompany.amount}
-                          onChange={e => setNewCompany({...newCompany, amount: Number(e.target.value)})}
+                          onChange={e => {
+                            const amount = Number(e.target.value);
+                            setNewCompany({
+                              ...newCompany, 
+                              amount,
+                              debt: amount - newCompany.payments
+                            });
+                          }}
                         />
                       </div>
                       <div>
@@ -648,9 +655,9 @@ export default function App() {
                         <input 
                           type="number"
                           placeholder="0.00" 
-                          className="w-full p-3 rounded-lg border border-slate-200 focus:ring-2 focus:ring-yellow-400 outline-none"
+                          className="w-full p-3 rounded-lg border border-slate-200 focus:ring-2 focus:ring-yellow-400 outline-none bg-slate-50"
                           value={newCompany.debt}
-                          onChange={e => setNewCompany({...newCompany, debt: Number(e.target.value)})}
+                          readOnly
                         />
                       </div>
                       <div>
@@ -660,7 +667,14 @@ export default function App() {
                           placeholder="0.00" 
                           className="w-full p-3 rounded-lg border border-slate-200 focus:ring-2 focus:ring-yellow-400 outline-none"
                           value={newCompany.payments}
-                          onChange={e => setNewCompany({...newCompany, payments: Number(e.target.value)})}
+                          onChange={e => {
+                            const payments = Number(e.target.value);
+                            setNewCompany({
+                              ...newCompany, 
+                              payments,
+                              debt: newCompany.amount - payments
+                            });
+                          }}
                         />
                       </div>
                     </div>
@@ -946,17 +960,17 @@ function CompanyView({ activeTab, user, setUser }: any) {
         // Map columns: assuming itm_cod and itm_desc are in the Excel
         const products = jsonData.map((row: any) => {
           // Find code column
-          const code = row.itm_cod || row.Código || row.codigo || row.Code || row.code || row['CÓDIGO'] || row['Codigo'] || row['Item Code'] || '';
+          const code = row.itm_cod || row.Código || row.codigo || row.Code || row.code || row['CÓDIGO'] || row['Codigo'] || row['Item Code'] || row['SKU'] || row['sku'] || '';
           // Find name column
-          const name = row.itm_desc || row.Descripción || row.descripcion || row.Description || row.description || row['DESCRIPCIÓN'] || row['Descripcion'] || row['Item Description'] || '';
+          const name = row.itm_desc || row.Descripción || row.descripcion || row.Description || row.description || row['DESCRIPCIÓN'] || row['Descripcion'] || row['Item Description'] || row['Título'] || row['titulo'] || '';
           // Find price column
-          const price = row.Precio || row.precio || row.Price || row.price || row['PRECIO'] || row['itm_prec'] || 0;
+          const price = row.Precio || row.precio || row.Price || row.price || row['PRECIO'] || row['itm_prec'] || row['Price'] || 0;
           // Find stock column
-          const stock = row.Stock || row.stock || row['STOCK'] || row['itm_stoc'] || 0;
+          const stock = row.Stock || row.stock || row['STOCK'] || row['itm_stoc'] || row['Quantity'] || row['cantidad'] || row['Disponible'] || row['disponible'] || row['available_quantity'] || 0;
           // Find category column
-          const category = row.Categoria || row.categoria || row.Category || row.category || row['CATEGORÍA'] || 'MLA1652';
+          const category = row.Categoria || row.categoria || row.Category || row.category || row['CATEGORÍA'] || row['category_id'] || 'MLA1652';
           // Find image column
-          const imageUrl = row.Imagen || row.imagen || row.Image || row.image || row['IMAGEN'] || '';
+          const imageUrl = row.Imagen || row.imagen || row.Image || row.image || row['IMAGEN'] || row['pictures'] || '';
 
           return {
             code: String(code).trim(),
@@ -975,9 +989,36 @@ function CompanyView({ activeTab, user, setUser }: any) {
           const columns = Object.keys(firstRow).join(', ');
           alert(`No se encontraron productos válidos. Verifique que las columnas itm_cod e itm_desc (o similares) existan.\n\nColumnas detectadas: ${columns}`);
         } else {
-          setListData(products);
-          setSelectedItems(new Set());
-          alert(`Se importaron ${products.length} productos correctamente.`);
+          if (activeTab === 'prices') {
+            // Merge with existing ML items
+            setListData(prev => {
+              const newList = [...prev];
+              let matches = 0;
+              products.forEach((exProd: any) => {
+                const index = newList.findIndex(item => item.code === exProd.code);
+                if (index !== -1) {
+                  newList[index] = { 
+                    ...newList[index], 
+                    price: exProd.price > 0 ? exProd.price : newList[index].price,
+                    stock: exProd.stock >= 0 ? exProd.stock : newList[index].stock
+                  };
+                  matches++;
+                  // Auto-select for sync
+                  setSelectedItems(prevSelect => {
+                    const next = new Set(prevSelect);
+                    next.add(newList[index].code);
+                    return next;
+                  });
+                }
+              });
+              alert(`Se actualizaron datos para ${matches} productos coincidentes desde Excel.`);
+              return newList;
+            });
+          } else {
+            setListData(products);
+            setSelectedItems(new Set());
+            alert(`Se importaron ${products.length} productos correctamente.`);
+          }
         }
       } catch (err) {
         console.error("Error parsing Excel:", err);
@@ -1223,6 +1264,17 @@ function CompanyView({ activeTab, user, setUser }: any) {
     }
   };
 
+  const handleStockChange = (code: string, newStock: number) => {
+    setListData(prev => prev.map(item => 
+      item.code === code ? { ...item, stock: newStock } : item
+    ));
+    if (!selectedItems.has(code)) {
+      const newSelection = new Set(selectedItems);
+      newSelection.add(code);
+      setSelectedItems(newSelection);
+    }
+  };
+
   const handleSync = async () => {
     if ((activeTab === 'products' || activeTab === 'prices') && selectedItems.size === 0) {
       alert('Por favor seleccione al menos un item para sincronizar.');
@@ -1365,11 +1417,18 @@ function CompanyView({ activeTab, user, setUser }: any) {
                 </h3>
                 <div className="flex items-center gap-3">
                   {activeTab === 'prices' && (
-                    <label className="px-4 py-2 bg-slate-900 text-white rounded-lg text-xs font-bold hover:bg-slate-800 transition-all flex items-center gap-2 cursor-pointer">
-                      <Upload size={14} />
-                      CARGAR .DAT (ODBC)
-                      <input type="file" accept=".dat" className="hidden" onChange={handleDatUpload} />
-                    </label>
+                    <div className="flex items-center gap-3">
+                      <label className="px-4 py-2 bg-yellow-400 text-slate-900 rounded-lg text-xs font-bold hover:bg-yellow-500 transition-all flex items-center gap-2 cursor-pointer">
+                        <Upload size={14} />
+                        ACTUALIZAR PRECIOS EXCEL
+                        <input type="file" accept=".xlsx, .xls" className="hidden" onChange={handleExcelImport} />
+                      </label>
+                      <label className="px-4 py-2 bg-slate-900 text-white rounded-lg text-xs font-bold hover:bg-slate-800 transition-all flex items-center gap-2 cursor-pointer">
+                        <Upload size={14} />
+                        CARGAR .DAT (ODBC)
+                        <input type="file" accept=".dat" className="hidden" onChange={handleDatUpload} />
+                      </label>
+                    </div>
                   )}
                   {activeTab === 'products' && (
                     <div className="flex flex-col items-end gap-1">
@@ -1434,24 +1493,44 @@ function CompanyView({ activeTab, user, setUser }: any) {
                         )}
                         <div>
                           <div className="font-bold text-slate-800">{item.name || item.number}</div>
-                          <div className="text-xs text-slate-400 font-medium">
+                          <div className="text-xs text-slate-400 font-medium flex items-center gap-2">
                             {activeTab === 'products' || activeTab === 'prices' ? `Código: ${item.code}` :
                              activeTab === 'clients' ? item.email : `Total: $${item.total}`}
+                            {activeTab === 'products' && item.ml_item_id && (
+                              <span className="px-1.5 py-0.5 bg-green-100 text-green-600 rounded text-[8px] font-black uppercase">Sincronizado ML</span>
+                            )}
                           </div>
                         </div>
                       </div>
-                      <div className="flex items-center gap-6">
-                        {activeTab === 'prices' && (
-                          <div className="flex items-center gap-2">
-                            <span className="text-xs font-bold text-slate-400">$</span>
-                            <input 
-                              type="number"
-                              value={item.price}
-                              onChange={(e) => handlePriceChange(item.code, Number(e.target.value))}
-                              className="w-24 p-1 text-sm font-bold border border-slate-200 rounded focus:ring-1 focus:ring-yellow-400 outline-none"
-                            />
-                          </div>
-                        )}
+                        <div className="flex items-center gap-6">
+                          {activeTab === 'prices' && (
+                            <div className="flex flex-col items-end gap-1">
+                              <div className="flex items-center gap-2">
+                                <span className="text-[10px] font-black text-slate-400 uppercase">ML Price:</span>
+                                <span className="text-xs font-bold text-slate-400">$</span>
+                                <input 
+                                  type="number"
+                                  value={item.price}
+                                  onChange={(e) => handlePriceChange(item.code, Number(e.target.value))}
+                                  className="w-24 p-1 text-sm font-bold border border-slate-200 rounded focus:ring-1 focus:ring-yellow-400 outline-none"
+                                />
+                              </div>
+                              <div className="flex items-center gap-2">
+                                <span className="text-[10px] font-black text-slate-400 uppercase">ML Stock:</span>
+                                <input 
+                                  type="number"
+                                  value={item.stock}
+                                  onChange={(e) => handleStockChange(item.code, Number(e.target.value))}
+                                  className="w-24 p-1 text-sm font-bold border border-slate-200 rounded focus:ring-1 focus:ring-yellow-400 outline-none"
+                                />
+                              </div>
+                              {item.local_price !== undefined && (
+                                <div className="text-[9px] font-bold text-slate-400">
+                                  Local: ${item.local_price} | Stock Local: {item.local_stock}
+                                </div>
+                              )}
+                            </div>
+                          )}
                         <div className="text-xs font-black text-slate-300">
                           {activeTab === 'prices' ? (item.last_updated ? new Date(item.last_updated).toLocaleString() : 'Pendiente') :
                            (item.created_at ? new Date(item.created_at).toLocaleDateString() : 'Lectura Local')}

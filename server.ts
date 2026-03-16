@@ -594,14 +594,27 @@ async function startServer() {
       });
       const itemsData = await itemsRes.json();
 
-      const products = itemsData.map((item: any) => ({
-        id: item.body.id,
-        code: item.body.seller_custom_field || item.body.id,
-        name: item.body.title,
-        price: item.body.price,
-        stock: item.body.available_quantity,
-        last_updated: item.body.last_updated || new Date().toISOString()
-      }));
+      // Fetch local products to relate data
+      const { data: localProducts } = await supabase
+        .from('products')
+        .select('*')
+        .eq('company_id', companyId);
+
+      const products = itemsData.map((item: any) => {
+        const mlCode = item.body.seller_custom_field || item.body.id;
+        const localMatch = localProducts?.find((lp: any) => lp.code === mlCode);
+        
+        return {
+          id: item.body.id,
+          code: mlCode,
+          name: item.body.title,
+          price: item.body.price,
+          stock: item.body.available_quantity,
+          local_price: localMatch?.price,
+          local_stock: localMatch?.stock,
+          last_updated: item.body.last_updated || new Date().toISOString()
+        };
+      });
 
       res.json(products);
     } catch (err: any) {

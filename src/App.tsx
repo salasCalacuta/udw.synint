@@ -63,6 +63,40 @@ interface Product {
   created_at?: string;
 }
 
+const SyncHistoryItem: React.FC<{ date: string, status: 'success' | 'error', items?: any[] }> = ({ date, status, items = [] }) => {
+  return (
+    <div className="space-y-2">
+      <div className="flex items-center justify-between">
+        <div className="text-sm font-bold text-slate-700">{date}</div>
+        <div className={`w-2 h-2 rounded-full ${status === 'success' ? 'bg-green-500' : 'bg-red-500'}`}></div>
+      </div>
+      {items && items.length > 0 && (
+        <div className="flex flex-wrap gap-1">
+          {items.map((item, idx) => (
+            <span key={idx} className="text-[8px] px-1.5 py-0.5 bg-slate-100 text-slate-500 rounded font-bold">
+              {item.code}
+            </span>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function StatCard({ label, value, color }: { label: string, value: any, color: string }) {
+  return (
+    <div className="bg-white p-6 rounded-2xl shadow-lg border border-slate-100 flex items-center gap-4">
+      <div className={`w-12 h-12 ${color} rounded-xl flex items-center justify-center text-white shadow-lg`}>
+        <LayoutDashboard size={24} />
+      </div>
+      <div>
+        <div className="text-xs font-black text-slate-400 uppercase tracking-wider">{label}</div>
+        <div className="text-2xl font-black text-slate-800">{value}</div>
+      </div>
+    </div>
+  );
+}
+
 export default function App() {
   const [user, setUser] = useState<any>(null);
   const [role, setRole] = useState<UserRole>(null);
@@ -2314,39 +2348,5 @@ function CompanyView({ activeTab, user, setUser }: any) {
         )}
       </AnimatePresence>
     </motion.div>
-  );
-}
-
-function StatCard({ label, value, color }: { label: string, value: any, color: string }) {
-  return (
-    <div className="bg-white p-6 rounded-2xl shadow-lg border border-slate-100 flex items-center gap-4">
-      <div className={`w-12 h-12 ${color} rounded-xl flex items-center justify-center text-white shadow-lg`}>
-        <LayoutDashboard size={24} />
-      </div>
-      <div>
-        <div className="text-xs font-black text-slate-400 uppercase tracking-wider">{label}</div>
-        <div className="text-2xl font-black text-slate-800">{value}</div>
-      </div>
-    </div>
-  );
-}
-
-const SyncHistoryItem: React.FC<{ date: string, status: 'success' | 'error', items?: any[] }> = ({ date, status, items = [] }) => {
-  return (
-    <div className="space-y-2">
-      <div className="flex items-center justify-between">
-        <div className="text-sm font-bold text-slate-700">{date}</div>
-        <div className={`w-2 h-2 rounded-full ${status === 'success' ? 'bg-green-500' : 'bg-red-500'}`}></div>
-      </div>
-      {items && items.length > 0 && (
-        <div className="flex flex-wrap gap-1">
-          {items.map((item, idx) => (
-            <span key={idx} className="text-[8px] px-1.5 py-0.5 bg-slate-100 text-slate-500 rounded font-bold">
-              {item.code}
-            </span>
-          ))}
-        </div>
-      )}
-    </div>
   );
 }

@@ -1,5 +1,5 @@
 {
-  "name": "SynInt",
-  "description": "Gestión centralizada de stock, precios y facturación entre sistemas locales y Mercado Libre para múltiples clientes.",
+  "name": "MLSyinInt-Version1.13",
+  "description": "Sincronizador de información entre Mercado Libre y sistemas locales de facturación.",
   "requestFramePermissions": []
 }

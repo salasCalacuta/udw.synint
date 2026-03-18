@@ -597,7 +597,7 @@ export default function App() {
                 {role === 'admin' ? 'Panel Administrador' : user.name}
               </span>
             </div>
-            <span className="text-[10px] font-black text-slate-700 uppercase tracking-widest">SynInt-ML.Version1.15</span>
+            <span className="text-[10px] font-black text-slate-700 uppercase tracking-widest">SynInt-ML.Version1.16</span>
           </div>
         </div>
 

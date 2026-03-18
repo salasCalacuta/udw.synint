@@ -1618,12 +1618,12 @@ function CompanyView({ activeTab, user, setUser }: any) {
   };
 
   const handleSync = async () => {
-    if ((activeTab === 'products' || activeTab === 'prices') && selectedItems.size === 0) {
+    if ((activeTab === 'products' || activeTab === 'prices' || activeTab === 'stock') && selectedItems.size === 0) {
       alert('Por favor seleccione al menos un item para sincronizar.');
       return;
     }
 
-    if (activeTab === 'products' || activeTab === 'prices') {
+    if (activeTab === 'products' || activeTab === 'prices' || activeTab === 'stock') {
       // Check if we have ML token
       if (!user.ml_access_token) {
         // Start OAuth flow
@@ -1777,13 +1777,34 @@ function CompanyView({ activeTab, user, setUser }: any) {
                     </div>
                   )}
                   {activeTab === 'products' && (
-                    <div className="flex flex-col items-end gap-1">
+                    <div className="flex items-center gap-3">
+                      <div className="flex flex-col items-end gap-1">
+                        <label className="px-4 py-2 bg-yellow-400 text-slate-900 rounded-lg text-xs font-bold hover:bg-yellow-500 transition-all flex items-center gap-2 cursor-pointer">
+                          <Upload size={14} />
+                          IMPORTAR EXCEL DISCV
+                          <input type="file" accept=".xlsx, .xls" className="hidden" onChange={handleExcelImport} />
+                        </label>
+                        <span className="text-[8px] text-slate-400 font-bold">Columnas: itm_cod, itm_desc, Precio, Stock</span>
+                      </div>
+                      <button 
+                        onClick={() => {
+                          setEditingProduct(null);
+                          setShowManualAdd(true);
+                        }}
+                        className="px-4 py-2 bg-slate-900 text-white rounded-lg text-xs font-bold hover:bg-slate-800 transition-all flex items-center gap-2"
+                      >
+                        <Plus size={14} />
+                        CARGA MANUAL
+                      </button>
+                    </div>
+                  )}
+                  {activeTab === 'stock' && (
+                    <div className="flex items-center gap-3">
                       <label className="px-4 py-2 bg-yellow-400 text-slate-900 rounded-lg text-xs font-bold hover:bg-yellow-500 transition-all flex items-center gap-2 cursor-pointer">
                         <Upload size={14} />
-                        IMPORTAR EXCEL DISCV
+                        ACTUALIZAR STOCK EXCEL
                         <input type="file" accept=".xlsx, .xls" className="hidden" onChange={handleExcelImport} />
                       </label>
-                      <span className="text-[8px] text-slate-400 font-bold">Columnas: itm_cod, itm_desc, Precio, Stock</span>
                     </div>
                   )}
                   {activeTab === 'clients' && (
@@ -1830,7 +1851,7 @@ function CompanyView({ activeTab, user, setUser }: any) {
                       }`}
                     >
                       <div className="flex items-center gap-4">
-                        {(activeTab === 'products' || activeTab === 'prices') && (
+                        {(activeTab === 'products' || activeTab === 'prices' || activeTab === 'stock') && (
                           <div className={`w-5 h-5 rounded border flex items-center justify-center transition-colors ${
                             selectedItems.has(item.code) ? 'bg-yellow-400 border-yellow-400' : 'border-slate-300 bg-white'
                           }`}>
@@ -1840,16 +1861,16 @@ function CompanyView({ activeTab, user, setUser }: any) {
                         <div>
                           <div className="font-bold text-slate-800">{item.name || item.nombre || item.number}</div>
                           <div className="text-xs text-slate-400 font-medium flex items-center gap-2">
-                            {activeTab === 'products' || activeTab === 'prices' ? `Código: ${item.code || item.codigo}` :
+                            {activeTab === 'products' || activeTab === 'prices' || activeTab === 'stock' ? `Código: ${item.code || item.codigo}` :
                              activeTab === 'clients' ? `${item.email || item.mail || 'Sin Email'} | ${item.localidad || 'Sin Localidad'}` : `Total: $${item.total}`}
-                            {activeTab === 'products' && item.ml_item_id && (
+                            {(activeTab === 'products' || activeTab === 'prices' || activeTab === 'stock') && item.ml_item_id && (
                               <span className="px-1.5 py-0.5 bg-green-100 text-green-600 rounded text-[8px] font-black uppercase">Sincronizado ML</span>
                             )}
                           </div>
                         </div>
                       </div>
                         <div className="flex items-center gap-6">
-                          {activeTab === 'prices' && (
+                          {(activeTab === 'prices' || activeTab === 'stock') && (
                             <div className="flex flex-col items-end gap-1">
                               <div className="flex items-center gap-2">
                                 <span className="text-[10px] font-black text-slate-400 uppercase">ML Price:</span>
@@ -1878,7 +1899,7 @@ function CompanyView({ activeTab, user, setUser }: any) {
                             </div>
                           )}
                         <div className="text-xs font-black text-slate-300">
-                          {activeTab === 'prices' ? (item.last_updated ? new Date(item.last_updated).toLocaleString() : 'Pendiente') :
+                          {activeTab === 'prices' || activeTab === 'stock' ? (item.last_updated ? new Date(item.last_updated).toLocaleString() : 'Pendiente') :
                            (item.created_at ? new Date(item.created_at).toLocaleDateString() : 'Lectura Local')}
                         </div>
                         {activeTab === 'products' && (
@@ -1890,7 +1911,7 @@ function CompanyView({ activeTab, user, setUser }: any) {
                             <Edit size={14} />
                           </button>
                         )}
-                        {activeTab !== 'products' && activeTab !== 'prices' && (
+                        {activeTab !== 'products' && activeTab !== 'prices' && activeTab !== 'stock' && (
                           <button 
                             onClick={(e) => { e.stopPropagation(); handleDeleteItem(item.id); }}
                             className="p-2 text-rose-400 hover:text-rose-600 opacity-0 group-hover:opacity-100 transition-all"

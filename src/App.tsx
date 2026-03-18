@@ -590,11 +590,14 @@ export default function App() {
       <div className="w-72 bg-yellow-400 flex flex-col shadow-2xl z-20">
         <div className="p-8 border-b border-yellow-500/30">
           <h1 className="text-3xl font-black text-slate-900 tracking-tighter">MLSync</h1>
-          <div className="mt-2 flex items-center gap-2">
-            <div className="w-2 h-2 bg-green-600 rounded-full animate-pulse"></div>
-            <span className="text-xs font-bold text-slate-800 uppercase tracking-wider">
-              {role === 'admin' ? 'Panel Administrador' : user.name}
-            </span>
+          <div className="mt-2 flex flex-col gap-1">
+            <div className="flex items-center gap-2">
+              <div className="w-2 h-2 bg-green-600 rounded-full animate-pulse"></div>
+              <span className="text-xs font-bold text-slate-800 uppercase tracking-wider">
+                {role === 'admin' ? 'Panel Administrador' : user.name}
+              </span>
+            </div>
+            <span className="text-[10px] font-black text-slate-700 uppercase tracking-widest">SynInt-ML.Version1.15</span>
           </div>
         </div>
 
@@ -1617,8 +1620,8 @@ function CompanyView({ activeTab, user, setUser }: any) {
     }
   };
 
-  const handleSync = async () => {
-    if ((activeTab === 'products' || activeTab === 'prices' || activeTab === 'stock') && selectedItems.size === 0) {
+  const handleSync = async (itemCode?: string) => {
+    if (!itemCode && (activeTab === 'products' || activeTab === 'prices' || activeTab === 'stock') && selectedItems.size === 0) {
       alert('Por favor seleccione al menos un item para sincronizar.');
       return;
     }
@@ -1639,7 +1642,15 @@ function CompanyView({ activeTab, user, setUser }: any) {
 
       setIsSyncing(true);
       try {
-        const itemsToSync = listData.filter(item => selectedItems.has(item.code));
+        const itemsToSync = itemCode 
+          ? listData.filter(item => item.code === itemCode)
+          : listData.filter(item => selectedItems.has(item.code));
+          
+        if (itemsToSync.length === 0) {
+          setIsSyncing(false);
+          return;
+        }
+
         const res = await fetch('/api/ml/sync-items', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
@@ -1666,7 +1677,7 @@ function CompanyView({ activeTab, user, setUser }: any) {
         setSyncHistory(prev => [syncResult, ...prev].slice(0, 10)); // Keep last 10
         
         if (data.success) {
-          alert(`Sincronización finalizada. Éxitos: ${successCount}, Errores: ${errorCount}`);
+          if (!itemCode) alert(`Sincronización finalizada. Éxitos: ${successCount}, Errores: ${errorCount}`);
           fetchList();
           fetchStats();
         } else {
@@ -1851,7 +1862,7 @@ function CompanyView({ activeTab, user, setUser }: any) {
                       }`}
                     >
                       <div className="flex items-center gap-4">
-                        {(activeTab === 'products' || activeTab === 'prices' || activeTab === 'stock') && (
+                        {activeTab === 'products' && (
                           <div className={`w-5 h-5 rounded border flex items-center justify-center transition-colors ${
                             selectedItems.has(item.code) ? 'bg-yellow-400 border-yellow-400' : 'border-slate-300 bg-white'
                           }`}>
@@ -1870,36 +1881,54 @@ function CompanyView({ activeTab, user, setUser }: any) {
                         </div>
                       </div>
                         <div className="flex items-center gap-6">
-                          {(activeTab === 'prices' || activeTab === 'stock') && (
+                          {(activeTab === 'prices' || activeTab === 'stock' || activeTab === 'products') && (
                             <div className="flex flex-col items-end gap-1">
-                              <div className="flex items-center gap-2">
-                                <span className="text-[10px] font-black text-slate-400 uppercase">ML Price:</span>
-                                <span className="text-xs font-bold text-slate-400">$</span>
-                                <input 
-                                  type="number"
-                                  value={item.price}
-                                  onChange={(e) => handlePriceChange(item.code, Number(e.target.value))}
-                                  className="w-24 p-1 text-sm font-bold border border-slate-200 rounded focus:ring-1 focus:ring-yellow-400 outline-none"
-                                />
-                              </div>
-                              <div className="flex items-center gap-2">
-                                <span className="text-[10px] font-black text-slate-400 uppercase">ML Stock:</span>
-                                <input 
-                                  type="number"
-                                  value={item.stock}
-                                  onChange={(e) => handleStockChange(item.code, Number(e.target.value))}
-                                  className="w-24 p-1 text-sm font-bold border border-slate-200 rounded focus:ring-1 focus:ring-yellow-400 outline-none"
-                                />
-                              </div>
+                              {(activeTab === 'prices' || activeTab === 'stock') && (
+                                <>
+                                  <div className="flex items-center gap-2">
+                                    <span className="text-[10px] font-black text-slate-400 uppercase">Precio ML:</span>
+                                    <span className="text-xs font-bold text-slate-400">$</span>
+                                    <input 
+                                      type="number"
+                                      value={item.price}
+                                      onChange={(e) => handlePriceChange(item.code, Number(e.target.value))}
+                                      className="w-24 p-1 text-sm font-bold border border-slate-200 rounded focus:ring-1 focus:ring-yellow-400 outline-none"
+                                    />
+                                  </div>
+                                  <div className="flex items-center gap-2">
+                                    <span className="text-[10px] font-black text-slate-400 uppercase">Stock ML:</span>
+                                    <input 
+                                      type="number"
+                                      value={item.stock}
+                                      onChange={(e) => handleStockChange(item.code, Number(e.target.value))}
+                                      className="w-24 p-1 text-sm font-bold border border-slate-200 rounded focus:ring-1 focus:ring-yellow-400 outline-none"
+                                    />
+                                  </div>
+                                </>
+                              )}
+                              {activeTab === 'products' && (
+                                <div className="flex flex-col items-end text-[10px] font-bold text-slate-400 mb-1">
+                                  <span>Precio: ${item.price}</span>
+                                  <span>Stock: {item.stock}</span>
+                                </div>
+                              )}
                               {item.local_price !== undefined && (
                                 <div className="text-[9px] font-bold text-slate-400">
                                   Local: ${item.local_price} | Stock Local: {item.local_stock}
                                 </div>
                               )}
+                              <button 
+                                onClick={(e) => { e.stopPropagation(); handleSync(item.code); }}
+                                disabled={isSyncing}
+                                className="mt-1 px-3 py-1 bg-yellow-400 text-slate-900 rounded-lg text-[8px] font-black uppercase hover:bg-yellow-500 transition-all flex items-center gap-1"
+                              >
+                                <RefreshCw size={10} className={isSyncing ? 'animate-spin' : ''} />
+                                Sincronizar
+                              </button>
                             </div>
                           )}
                         <div className="text-xs font-black text-slate-300">
-                          {activeTab === 'prices' || activeTab === 'stock' ? (item.last_updated ? new Date(item.last_updated).toLocaleString() : 'Pendiente') :
+                          {activeTab === 'prices' || activeTab === 'stock' || activeTab === 'products' ? (item.last_updated ? new Date(item.last_updated).toLocaleString() : 'Pendiente') :
                            (item.created_at ? new Date(item.created_at).toLocaleDateString() : 'Lectura Local')}
                         </div>
                         {activeTab === 'products' && (
@@ -1925,22 +1954,8 @@ function CompanyView({ activeTab, user, setUser }: any) {
                 </div>
               )}
 
-              <div className="mt-8 flex flex-col items-center gap-4">
-                <button 
-                  onClick={handleSync}
-                  disabled={isSyncing}
-                  className={`px-12 py-4 rounded-xl font-black text-lg shadow-xl transition-all ${
-                    isSyncing 
-                      ? 'bg-slate-100 text-slate-400 cursor-not-allowed' 
-                      : 'bg-yellow-400 text-slate-900 hover:bg-yellow-500 hover:scale-105 active:scale-95'
-                  }`}
-                >
-                  {isSyncing ? 'SINCRONIZANDO...' : 'SINCRONIZAR A ML'}
-                </button>
-                <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest">
-                  Los cambios se guardarán en cada plataforma según corresponda
-                </p>
-              </div>
+              {/* Botón de sincronización masiva eliminado para priorizar sincronización por item */}
+
             </div>
 
             {activeTab === 'invoices' && (
@@ -2169,25 +2184,51 @@ function CompanyView({ activeTab, user, setUser }: any) {
               <button onClick={() => setShowManualAdd(false)} className="text-white/50 hover:text-white">✕</button>
             </div>
             <div className="p-8 space-y-4">
-              {activeTab === 'inventory' && (
+              {activeTab === 'products' && (
                 <>
                   <input 
-                    placeholder="Nombre del Producto" 
+                    placeholder="Código del Producto" 
+                    className="w-full p-3 rounded-lg border border-slate-200"
+                    onChange={e => setNewItem({...newItem, code: e.target.value})}
+                  />
+                  <input 
+                    placeholder="Descripción / Nombre" 
                     className="w-full p-3 rounded-lg border border-slate-200"
                     onChange={e => setNewItem({...newItem, name: e.target.value})}
                   />
+                  <div className="grid grid-cols-2 gap-4">
+                    <input 
+                      type="number"
+                      placeholder="Precio" 
+                      className="w-full p-3 rounded-lg border border-slate-200"
+                      onChange={e => setNewItem({...newItem, price: Number(e.target.value)})}
+                    />
+                    <input 
+                      type="number"
+                      placeholder="Stock" 
+                      className="w-full p-3 rounded-lg border border-slate-200"
+                      onChange={e => setNewItem({...newItem, stock: Number(e.target.value)})}
+                    />
+                  </div>
                   <input 
-                    type="number"
-                    placeholder="Precio" 
+                    placeholder="Categoría (Ej: MLA1652)" 
                     className="w-full p-3 rounded-lg border border-slate-200"
-                    onChange={e => setNewItem({...newItem, price: Number(e.target.value)})}
+                    onChange={e => setNewItem({...newItem, category_id: e.target.value})}
                   />
-                  <input 
-                    type="number"
-                    placeholder="Stock" 
+                  <textarea 
+                    placeholder="Descripción Larga / Detallada" 
+                    rows={3}
                     className="w-full p-3 rounded-lg border border-slate-200"
-                    onChange={e => setNewItem({...newItem, stock: Number(e.target.value)})}
+                    onChange={e => setNewItem({...newItem, description: e.target.value})}
                   />
+                  <div className="space-y-2">
+                    <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest">URL de Imagen (Opcional)</label>
+                    <input 
+                      placeholder="https://ejemplo.com/imagen.jpg" 
+                      className="w-full p-3 rounded-lg border border-slate-200"
+                      onChange={e => setNewItem({...newItem, pictures: e.target.value ? [{ source: e.target.value }] : null})}
+                    />
+                  </div>
                 </>
               )}
               {activeTab === 'clients' && (

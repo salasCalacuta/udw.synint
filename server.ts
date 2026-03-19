@@ -90,9 +90,9 @@ async function startServer() {
     console.log(`Login attempt: user=${username}, isAdmin=${isAdmin}`);
 
     if (isAdmin) {
-      if (username === "udwadmin" && password === "udw2017") {
+      if ((username === "udwadmin" && password === "udw2017") || (username === "udw.desarrollos@gmail.com" && password === "udw2017")) {
         console.log("Admin login successful");
-        return res.json({ success: true, user: { username: "udwadmin", role: "admin" } });
+        return res.json({ success: true, user: { username: username, role: "admin" } });
       }
       console.log("Admin login failed: invalid credentials");
       return res.status(401).json({ success: false, message: "Credenciales de administrador incorrectas" });
@@ -438,7 +438,8 @@ async function startServer() {
       const { 
         name, responsible_name, username, password, phone, email, 
         amount, debt, payments, 
-        ml_client_id, ml_client_secret, ml_callback_url 
+        ml_client_id, ml_client_secret, ml_callback_url,
+        ml_is_collaborator, ml_collaborator_email
       } = req.body;
       
       const payload = { 
@@ -454,6 +455,8 @@ async function startServer() {
         ml_client_id: ml_client_id || '',
         ml_client_secret: ml_client_secret || '',
         ml_callback_url: ml_callback_url || '',
+        ml_is_collaborator: !!ml_is_collaborator,
+        ml_collaborator_email: ml_collaborator_email || '',
         enabled: true 
       };
 

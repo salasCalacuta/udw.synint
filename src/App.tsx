@@ -47,6 +47,8 @@ interface Company {
   ml_refresh_token?: string;
   ml_user_id?: string;
   ml_token_expires?: string;
+  ml_is_collaborator?: boolean;
+  ml_collaborator_email?: string;
   lastSync?: string;
 }
 
@@ -298,7 +300,9 @@ export default function App() {
               payments: 0,
               ml_client_id: '',
               ml_client_secret: '',
-              ml_callback_url: ''
+              ml_callback_url: '',
+              ml_is_collaborator: false,
+              ml_collaborator_email: ''
             });
             fetchCompanies();
           } else {
@@ -308,7 +312,6 @@ export default function App() {
         } catch (err) {
           alert('Error de conexión al servidor');
         }
-        setShowConfirm({ ...showConfirm, show: false });
       }
     });
   };
@@ -331,7 +334,6 @@ export default function App() {
         } catch (err) {
           alert('Error de red al intentar eliminar.');
         }
-        setShowConfirm({ ...showConfirm, show: false });
       }
     });
   };
@@ -597,7 +599,7 @@ export default function App() {
                 {role === 'admin' ? 'Panel Administrador' : user.name}
               </span>
             </div>
-            <span className="text-[10px] font-black text-slate-700 uppercase tracking-widest">SynInt-ML.Version1.16</span>
+            <span className="text-[10px] font-black text-slate-700 uppercase tracking-widest">SynInt-ML.Version1.19</span>
           </div>
         </div>
 
@@ -627,12 +629,6 @@ export default function App() {
               />
               <div className="pt-4 pb-2 px-4 text-[10px] font-black text-slate-800/50 uppercase tracking-[0.2em]">Sincronización</div>
               <SidebarItem 
-                icon={<Tag size={20} />} 
-                label="Precios" 
-                active={activeTab === 'prices'} 
-                onClick={() => setActiveTab('prices')} 
-              />
-              <SidebarItem 
                 icon={<Package size={20} />} 
                 label="Productos" 
                 active={activeTab === 'products'} 
@@ -640,7 +636,7 @@ export default function App() {
               />
               <SidebarItem 
                 icon={<Boxes size={20} />} 
-                label="Stock" 
+                label="Stock y Precios" 
                 active={activeTab === 'stock'} 
                 onClick={() => setActiveTab('stock')} 
               />
@@ -715,6 +711,7 @@ export default function App() {
               activeTab={activeTab} 
               user={user}
               setUser={setUser}
+              setShowConfirm={setShowConfirm}
             />
           )}
         </AnimatePresence>
@@ -831,6 +828,26 @@ export default function App() {
                         value={newCompany.ml_callback_url}
                         onChange={e => setNewCompany({...newCompany, ml_callback_url: e.target.value})}
                       />
+                      <div className="flex items-center gap-2 p-2 bg-slate-50 rounded-lg border border-slate-200">
+                        <input 
+                          type="checkbox"
+                          id="is_collaborator"
+                          checked={newCompany.ml_is_collaborator}
+                          onChange={e => setNewCompany({...newCompany, ml_is_collaborator: e.target.checked})}
+                          className="w-4 h-4 text-yellow-400 rounded focus:ring-yellow-400"
+                        />
+                        <label htmlFor="is_collaborator" className="text-xs font-bold text-slate-700 cursor-pointer">
+                          Cuenta de Colaborador
+                        </label>
+                      </div>
+                      {newCompany.ml_is_collaborator && (
+                        <input 
+                          placeholder="Email del Colaborador" 
+                          className="w-full p-3 rounded-lg border border-slate-200 focus:ring-2 focus:ring-yellow-400 outline-none"
+                          value={newCompany.ml_collaborator_email}
+                          onChange={e => setNewCompany({...newCompany, ml_collaborator_email: e.target.value})}
+                        />
+                      )}
                     </div>
                   </div>
                 </div>
@@ -875,7 +892,16 @@ export default function App() {
                     No, cancelar
                   </button>
                   <button 
-                    onClick={showConfirm.action}
+                    onClick={async () => {
+                      if (showConfirm.action) {
+                        try {
+                          await showConfirm.action();
+                        } catch (err) {
+                          console.error("Error in confirmation action:", err);
+                        }
+                      }
+                      setShowConfirm(prev => ({ ...prev, show: false }));
+                    }}
                     className="flex-1 py-3 bg-slate-900 text-white font-bold rounded-xl"
                   >
                     Sí, confirmar
@@ -1175,12 +1201,13 @@ function AdminView({ activeTab, companies, toggleStatus, showAdd, testConnection
   );
 }
 
-function CompanyView({ activeTab, user, setUser }: any) {
+function CompanyView({ activeTab, user, setUser, setShowConfirm }: any) {
   const [syncData, setSyncData] = useState<any>(null);
   const [syncHistory, setSyncHistory] = useState<any[]>([]);
   const [isSyncing, setIsSyncing] = useState(false);
   const [stats, setStats] = useState({ products: 0, clients: 0, invoices: 0 });
   const [listData, setListData] = useState<any[]>([]);
+  const [cachedExcelProducts, setCachedExcelProducts] = useState<any[]>([]);
   const [isLoading, setIsLoading] = useState(false);
   const [showManualAdd, setShowManualAdd] = useState(false);
   const [showEditProduct, setShowEditProduct] = useState(false);
@@ -1242,7 +1269,7 @@ function CompanyView({ activeTab, user, setUser }: any) {
           const columns = Object.keys(firstRow).join(', ');
           alert(`No se encontraron productos válidos. Verifique que las columnas itm_cod e itm_desc (o similares) existan.\n\nColumnas detectadas: ${columns}`);
         } else {
-          if (activeTab === 'prices') {
+          if (activeTab === 'prices' || activeTab === 'stock') {
             // Merge with existing ML items
             setListData(prev => {
               const newList = [...prev];
@@ -1253,7 +1280,9 @@ function CompanyView({ activeTab, user, setUser }: any) {
                   newList[index] = { 
                     ...newList[index], 
                     price: exProd.price > 0 ? exProd.price : newList[index].price,
-                    stock: exProd.stock >= 0 ? exProd.stock : newList[index].stock
+                    stock: exProd.stock >= 0 ? exProd.stock : newList[index].stock,
+                    local_price: exProd.price,
+                    local_stock: exProd.stock
                   };
                   matches++;
                   // Auto-select for sync
@@ -1265,10 +1294,12 @@ function CompanyView({ activeTab, user, setUser }: any) {
                 }
               });
               alert(`Se actualizaron datos para ${matches} productos coincidentes desde Excel.`);
+              setCachedExcelProducts(newList);
               return newList;
             });
           } else {
             setListData(products);
+            setCachedExcelProducts(products);
             setSelectedItems(new Set());
             alert(`Se importaron ${products.length} productos correctamente.`);
           }
@@ -1281,15 +1312,28 @@ function CompanyView({ activeTab, user, setUser }: any) {
     reader.readAsArrayBuffer(file);
   };
 
-  const toggleItemSelection = (code: string) => {
+  const toggleItemSelection = (id: string | number) => {
     const newSelection = new Set(selectedItems);
-    if (newSelection.has(code)) {
-      newSelection.delete(code);
+    if (newSelection.has(id)) {
+      newSelection.delete(id);
     } else {
-      newSelection.add(code);
+      newSelection.add(id);
     }
     setSelectedItems(newSelection);
   };
+
+  const toggleSelectAll = () => {
+    if (selectedItems.size === listData.length && listData.length > 0) {
+      setSelectedItems(new Set());
+    } else {
+      const allIds = listData.map((item: any) => item.id || item.code || item.codigo);
+      setSelectedItems(new Set(allIds));
+    }
+  };
+
+  useEffect(() => {
+    setSelectedItems(new Set());
+  }, [activeTab]);
 
   const handleExcelUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -1307,27 +1351,29 @@ function CompanyView({ activeTab, user, setUser }: any) {
         console.log("Client Excel data parsed:", jsonData);
         
         const mappedClients = jsonData.map((row: any) => {
-          const codigo = row.codigo || row.Codigo || row.Código || row.code || '';
-          const nombre = row.nombre || row.Nombre || row.name || '';
-          const direccion = row.direccion || row.Direccion || row.Dirección || row.address || '';
-          const localidad = row.localidad || row.Localidad || row.city || '';
-          const telefono = row.telefono || row.Telefono || row.phone || '';
-          const mail = row.mail || row.Mail || row.email || row.Email || '';
+          const codigo = row.codigo || row.Codigo || row.Código || row.code || row.Code || row.CODIGO || '';
+          const nombre = row.nombre || row.Nombre || row.name || row.Name || row.NOMBRE || '';
+          const direccion = row.direccion || row.Direccion || row.Dirección || row.address || row.Address || row.DIRECCION || '';
+          const localidad = row.localidad || row.Localidad || row.city || row.City || row.LOCALIDAD || '';
+          const telefono = row.telefono || row.Telefono || row.phone || row.Phone || row.TELEFONO || '';
+          const mail = row.mail || row.Mail || row.email || row.Email || row.MAIL || row.EMAIL || '';
           
           return {
-            codigo,
-            nombre,
-            direccion,
-            localidad,
-            telefono,
-            mail,
-            email: mail, // For UI consistency
+            codigo: String(codigo).trim(),
+            nombre: String(nombre).trim(),
+            direccion: String(direccion).trim(),
+            localidad: String(localidad).trim(),
+            telefono: String(telefono).trim(),
+            mail: String(mail).trim(),
+            email: String(mail).trim(), // For UI consistency
             company_id: user.id
           };
-        }).filter(c => c.nombre || c.mail);
+        }).filter(c => c.nombre || c.mail || c.codigo);
+
+        console.log("Mapped clients for import:", mappedClients);
 
         if (mappedClients.length === 0) {
-          alert("No se encontraron clientes válidos en el archivo.");
+          alert("No se encontraron clientes válidos en el archivo. Verifique las columnas (codigo, nombre, mail, etc).");
           return;
         }
 
@@ -1410,20 +1456,32 @@ function CompanyView({ activeTab, user, setUser }: any) {
 
   const handleSaveProduct = async () => {
     if (!editingProduct) return;
-    try {
-      const res = await fetch(`/api/products/${editingProduct.id}`, {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(editingProduct)
-      });
-      if (res.ok) {
-        setShowEditProduct(false);
-        setEditingProduct(null);
-        fetchList();
+    
+    setShowConfirm({
+      show: true,
+      title: 'Confirmar Edición',
+      message: '¿Estás seguro de que deseas guardar los cambios en este producto?',
+      action: async () => {
+        try {
+          const res = await fetch(`/api/products/${editingProduct.id}`, {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(editingProduct)
+          });
+          if (res.ok) {
+            setShowEditProduct(false);
+            setEditingProduct(null);
+            setCachedExcelProducts([]); // Clear cache to fetch latest from DB
+            fetchList();
+          } else {
+            alert('Error al guardar los cambios del producto');
+          }
+        } catch (err) {
+          console.error("Error saving product:", err);
+          alert('Error de red al guardar los cambios');
+        }
       }
-    } catch (err) {
-      console.error("Error saving product:", err);
-    }
+    });
   };
 
   const handleImageUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -1473,11 +1531,16 @@ function CompanyView({ activeTab, user, setUser }: any) {
   const fetchList = async () => {
     setIsLoading(true);
     try {
+      if (activeTab === 'products' && cachedExcelProducts.length > 0) {
+        setListData(cachedExcelProducts);
+        return;
+      }
+
       let endpoint = '';
       if (activeTab === 'products') endpoint = `/api/products?companyId=${user.id}`;
       if (activeTab === 'clients') endpoint = `/api/clients?companyId=${user.id}`;
       if (activeTab === 'invoices') endpoint = `/api/invoices?companyId=${user.id}`;
-      if (activeTab === 'prices') endpoint = `/api/ml/items?companyId=${user.id}`;
+      if (activeTab === 'prices' || activeTab === 'stock') endpoint = `/api/ml/items?companyId=${user.id}`;
       
       if (endpoint) {
         const res = await fetch(endpoint);
@@ -1512,6 +1575,7 @@ function CompanyView({ activeTab, user, setUser }: any) {
 
       const res = await fetch(endpoint, { method: 'DELETE' });
       if (res.ok) {
+        setCachedExcelProducts([]); // Clear cache to fetch latest from DB
         fetchList();
         fetchStats();
       }
@@ -1521,27 +1585,40 @@ function CompanyView({ activeTab, user, setUser }: any) {
   };
 
   const handleManualAdd = async () => {
-    try {
-      let endpoint = '';
-      if (activeTab === 'products') endpoint = '/api/products';
-      if (activeTab === 'clients') endpoint = '/api/clients';
-      if (activeTab === 'invoices') endpoint = '/api/invoices';
+    setShowConfirm({
+      show: true,
+      title: 'Confirmar Registro',
+      message: '¿Estás seguro de que deseas registrar este nuevo item?',
+      action: async () => {
+        try {
+          let endpoint = '';
+          if (activeTab === 'products') endpoint = '/api/products';
+          if (activeTab === 'clients') endpoint = '/api/clients';
+          if (activeTab === 'invoices') endpoint = '/api/invoices';
 
-      const res = await fetch(endpoint, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ ...newItem, companyId: user.id })
-      });
+          const res = await fetch(endpoint, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ ...newItem, company_id: user.id })
+          });
 
-      if (res.ok) {
-        setShowManualAdd(false);
-        setNewItem({});
-        fetchList();
-        fetchStats();
+          if (res.ok) {
+            setShowManualAdd(false);
+            setNewItem({});
+            setCachedExcelProducts([]); // Clear cache to fetch latest from DB
+            fetchList();
+            fetchStats();
+          } else {
+            alert('Error al guardar el registro');
+          }
+        } catch (err) {
+          console.error("Error adding item:", err);
+          alert('Error de red al guardar el registro');
+        } finally {
+          setShowConfirm(prev => ({ ...prev, show: false }));
+        }
       }
-    } catch (err) {
-      console.error("Error adding item:", err);
-    }
+    });
   };
 
   const handleDatUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -1621,7 +1698,7 @@ function CompanyView({ activeTab, user, setUser }: any) {
   };
 
   const handleSync = async (itemCode?: string) => {
-    if (!itemCode && (activeTab === 'products' || activeTab === 'prices' || activeTab === 'stock') && selectedItems.size === 0) {
+    if (!itemCode && (activeTab === 'products' || activeTab === 'prices' || activeTab === 'stock' || activeTab === 'clients' || activeTab === 'invoices') && selectedItems.size === 0) {
       alert('Por favor seleccione al menos un item para sincronizar.');
       return;
     }
@@ -1643,8 +1720,8 @@ function CompanyView({ activeTab, user, setUser }: any) {
       setIsSyncing(true);
       try {
         const itemsToSync = itemCode 
-          ? listData.filter(item => item.code === itemCode)
-          : listData.filter(item => selectedItems.has(item.code));
+          ? listData.filter(item => (item.id || item.code || item.codigo) === itemCode)
+          : listData.filter(item => selectedItems.has(item.id || item.code || item.codigo));
           
         if (itemsToSync.length === 0) {
           setIsSyncing(false);
@@ -1747,7 +1824,14 @@ function CompanyView({ activeTab, user, setUser }: any) {
     >
       <div>
         <h2 className="text-4xl font-black text-slate-900 tracking-tight capitalize">
-          {activeTab === 'dashboard' ? 'Resumen General' : `Sincronizar ${activeTab}`}
+          {activeTab === 'dashboard' ? 'Panel de Control' : 
+           activeTab === 'companies' ? 'Gestión de Empresas' :
+           activeTab === 'prices' ? 'Actualización de Precios' :
+           activeTab === 'products' ? 'Inventario de Productos' :
+           activeTab === 'stock' ? 'Control de Stock' :
+           activeTab === 'invoices' ? 'Facturación Mercado Libre' :
+           activeTab === 'pdf' ? 'Gestión de PDFs' :
+           activeTab === 'clients' ? 'Mis Clientes' : `Sincronizar ${activeTab}`}
         </h2>
         <p className="text-slate-500 font-medium mt-1">
           {activeTab === 'dashboard' ? 'Estado actual de tus integraciones' : `Gestión de datos entre Sistema Local y Mercado Libre`}
@@ -1764,15 +1848,36 @@ function CompanyView({ activeTab, user, setUser }: any) {
       ) : (
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
           <div className="lg:col-span-2 space-y-6">
-            <div className="bg-white p-8 rounded-2xl shadow-xl border border-slate-100">
+            {(activeTab !== 'invoices' && activeTab !== 'pdf') && (
+              <div className="bg-white p-8 rounded-2xl shadow-xl border border-slate-100">
               <div className="flex items-center justify-between mb-8">
                 <h3 className="text-xl font-bold text-slate-800 flex items-center gap-2">
                   <Upload size={24} className="text-yellow-500" />
                   {activeTab === 'prices' ? 'Actualización de Precios (ML)' :
-                   activeTab === 'products' ? 'Inventario de Productos (ODBC)' : 
-                   activeTab === 'clients' ? 'Mis Clientes' : 'Facturación'}
+                   activeTab === 'products' ? 'Inventario de Productos' : 
+                   activeTab === 'clients' ? 'Mis Clientes' : 
+                   (activeTab === 'invoices' || activeTab === 'pdf') ? '' : 'Facturación'}
                 </h3>
                 <div className="flex items-center gap-3">
+                  {activeTab !== 'invoices' && (
+                    <>
+                      <button 
+                        onClick={toggleSelectAll}
+                        className="px-4 py-2 bg-slate-100 text-slate-600 rounded-lg text-xs font-bold hover:bg-slate-200 transition-all flex items-center gap-2"
+                      >
+                        {selectedItems.size === listData.length && listData.length > 0 ? 'DESELECCIONAR TODO' : 'SELECCIONAR TODO'}
+                      </button>
+                      {selectedItems.size > 0 && (
+                        <button 
+                          onClick={() => handleSync()}
+                          className="px-4 py-2 bg-green-600 text-white rounded-lg text-xs font-bold hover:bg-green-700 transition-all flex items-center gap-2"
+                        >
+                          <RefreshCw size={14} className={isSyncing ? 'animate-spin' : ''} />
+                          SINCRONIZAR SELECCIONADOS ({selectedItems.size})
+                        </button>
+                      )}
+                    </>
+                  )}
                   {activeTab === 'prices' && (
                     <div className="flex items-center gap-3">
                       <label className="px-4 py-2 bg-yellow-400 text-slate-900 rounded-lg text-xs font-bold hover:bg-yellow-500 transition-all flex items-center gap-2 cursor-pointer">
@@ -1792,7 +1897,7 @@ function CompanyView({ activeTab, user, setUser }: any) {
                       <div className="flex flex-col items-end gap-1">
                         <label className="px-4 py-2 bg-yellow-400 text-slate-900 rounded-lg text-xs font-bold hover:bg-yellow-500 transition-all flex items-center gap-2 cursor-pointer">
                           <Upload size={14} />
-                          IMPORTAR EXCEL DISCV
+                          IMPORTAR EXCEL
                           <input type="file" accept=".xlsx, .xls" className="hidden" onChange={handleExcelImport} />
                         </label>
                         <span className="text-[8px] text-slate-400 font-bold">Columnas: itm_cod, itm_desc, Precio, Stock</span>
@@ -1811,11 +1916,7 @@ function CompanyView({ activeTab, user, setUser }: any) {
                   )}
                   {activeTab === 'stock' && (
                     <div className="flex items-center gap-3">
-                      <label className="px-4 py-2 bg-yellow-400 text-slate-900 rounded-lg text-xs font-bold hover:bg-yellow-500 transition-all flex items-center gap-2 cursor-pointer">
-                        <Upload size={14} />
-                        ACTUALIZAR STOCK EXCEL
-                        <input type="file" accept=".xlsx, .xls" className="hidden" onChange={handleExcelImport} />
-                      </label>
+                      {/* Botón eliminado por solicitud del usuario */}
                     </div>
                   )}
                   {activeTab === 'clients' && (
@@ -1834,12 +1935,17 @@ function CompanyView({ activeTab, user, setUser }: any) {
                       </button>
                     </>
                   )}
+                  {activeTab === 'invoices' && (
+                    <div className="flex items-center gap-3">
+                      {/* No manual add or excel import for invoices as per user request */}
+                    </div>
+                  )}
                 </div>
               </div>
               
               {isLoading ? (
                 <div className="p-12 text-center text-slate-400 font-bold">Cargando datos...</div>
-              ) : listData.length === 0 ? (
+              ) : listData.length === 0 && activeTab !== 'invoices' ? (
                 <div className="border-2 border-dashed border-slate-200 rounded-2xl p-12 text-center hover:border-yellow-400 transition-colors cursor-pointer group">
                   <div className="w-16 h-16 bg-yellow-100 text-yellow-600 rounded-full flex items-center justify-center mx-auto mb-4 group-hover:scale-110 transition-transform">
                     <Upload size={32} />
@@ -1849,26 +1955,28 @@ function CompanyView({ activeTab, user, setUser }: any) {
                     {activeTab === 'products' ? 'Cargue un archivo Excel DISCV para comenzar' : 'Arrastra un archivo para sincronizar o carga manualmente'}
                   </p>
                 </div>
+              ) : activeTab === 'invoices' ? (
+                <div className="p-12 text-center text-slate-400 font-bold italic">
+                  Utilice el panel inferior para descargar ventas de Mercado Libre
+                </div>
               ) : (
                 <div className="space-y-4">
                   {listData.map((item: any) => (
                     <div 
                       key={item.id || item.code} 
-                      onClick={() => activeTab === 'products' && toggleItemSelection(item.code)}
+                      onClick={() => toggleItemSelection(item.id || item.code || item.codigo)}
                       className={`p-4 border rounded-xl flex justify-between items-center transition-colors group cursor-pointer ${
-                        activeTab === 'products' && selectedItems.has(item.code) 
+                        selectedItems.has(item.id || item.code || item.codigo) 
                           ? 'border-yellow-400 bg-yellow-50' 
                           : 'border-slate-100 hover:bg-slate-50'
                       }`}
                     >
                       <div className="flex items-center gap-4">
-                        {activeTab === 'products' && (
-                          <div className={`w-5 h-5 rounded border flex items-center justify-center transition-colors ${
-                            selectedItems.has(item.code) ? 'bg-yellow-400 border-yellow-400' : 'border-slate-300 bg-white'
-                          }`}>
-                            {selectedItems.has(item.code) && <CheckCircle2 size={12} className="text-slate-900" />}
-                          </div>
-                        )}
+                        <div className={`w-5 h-5 rounded border flex items-center justify-center transition-colors ${
+                          selectedItems.has(item.id || item.code || item.codigo) ? 'bg-yellow-400 border-yellow-400' : 'border-slate-300 bg-white'
+                        }`}>
+                          {selectedItems.has(item.id || item.code || item.codigo) && <CheckCircle2 size={12} className="text-slate-900" />}
+                        </div>
                         <div>
                           <div className="font-bold text-slate-800">{item.name || item.nombre || item.number}</div>
                           <div className="text-xs text-slate-400 font-medium flex items-center gap-2">
@@ -1881,6 +1989,16 @@ function CompanyView({ activeTab, user, setUser }: any) {
                         </div>
                       </div>
                         <div className="flex items-center gap-6">
+                          <button 
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              handleSync(item.id || item.code || item.codigo);
+                            }}
+                            className="p-2 text-slate-400 hover:text-green-600 hover:bg-green-50 rounded-lg transition-all"
+                            title="Sincronizar Individualmente"
+                          >
+                            <RefreshCw size={16} />
+                          </button>
                           {(activeTab === 'prices' || activeTab === 'stock' || activeTab === 'products') && (
                             <div className="flex flex-col items-end gap-1">
                               {(activeTab === 'prices' || activeTab === 'stock') && (
@@ -1918,7 +2036,7 @@ function CompanyView({ activeTab, user, setUser }: any) {
                                 </div>
                               )}
                               <button 
-                                onClick={(e) => { e.stopPropagation(); handleSync(item.code); }}
+                                onClick={(e) => { e.stopPropagation(); handleSync(item.id || item.code || item.codigo); }}
                                 disabled={isSyncing}
                                 className="mt-1 px-3 py-1 bg-yellow-400 text-slate-900 rounded-lg text-[8px] font-black uppercase hover:bg-yellow-500 transition-all flex items-center gap-1"
                               >
@@ -1956,7 +2074,8 @@ function CompanyView({ activeTab, user, setUser }: any) {
 
               {/* Botón de sincronización masiva eliminado para priorizar sincronización por item */}
 
-            </div>
+              </div>
+            )}
 
             {activeTab === 'invoices' && (
               <motion.div 
@@ -1994,24 +2113,6 @@ function CompanyView({ activeTab, user, setUser }: any) {
                     DESCARGAR Y EXPORTAR .XLS
                   </button>
                 </div>
-
-                {mlSales.length > 0 && (
-                  <div className="mt-8 space-y-4">
-                    <h4 className="text-sm font-black text-slate-400 uppercase tracking-widest">Ventas Encontradas</h4>
-                    {mlSales.map((sale: any) => (
-                      <div key={sale.id} className="p-4 border border-slate-100 rounded-xl flex justify-between items-center">
-                        <div>
-                          <div className="font-bold text-slate-800">{sale.item}</div>
-                          <div className="text-xs text-slate-400">{sale.date} | ${sale.amount}</div>
-                        </div>
-                        <label className="px-4 py-2 bg-slate-900 text-white rounded-lg text-[10px] font-black uppercase hover:bg-slate-800 transition-all cursor-pointer">
-                          Adjuntar Factura PDF
-                          <input type="file" accept=".pdf" className="hidden" onChange={(e) => handlePdfUpload(e, sale.id)} />
-                        </label>
-                      </div>
-                    ))}
-                  </div>
-                )}
               </motion.div>
             )}
 
@@ -2222,12 +2323,49 @@ function CompanyView({ activeTab, user, setUser }: any) {
                     onChange={e => setNewItem({...newItem, description: e.target.value})}
                   />
                   <div className="space-y-2">
-                    <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest">URL de Imagen (Opcional)</label>
-                    <input 
-                      placeholder="https://ejemplo.com/imagen.jpg" 
-                      className="w-full p-3 rounded-lg border border-slate-200"
-                      onChange={e => setNewItem({...newItem, pictures: e.target.value ? [{ source: e.target.value }] : null})}
-                    />
+                    <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Imágenes del Producto (Máx 3)</label>
+                    <div className="flex gap-2">
+                      <label className="flex-1 p-3 bg-slate-50 border border-dashed border-slate-200 rounded-lg text-center cursor-pointer hover:border-yellow-400 transition-all">
+                        <Upload size={16} className="mx-auto mb-1 text-slate-400" />
+                        <span className="text-[10px] font-bold text-slate-500">Subir Imagen</span>
+                        <input 
+                          type="file" 
+                          accept=".jpg" 
+                          multiple 
+                          className="hidden" 
+                          onChange={(e) => {
+                            const files = e.target.files;
+                            if (files) {
+                              const readers = (Array.from(files) as File[]).slice(0, 3).map(file => {
+                                return new Promise((resolve) => {
+                                  const reader = new FileReader();
+                                  reader.onload = (evt) => resolve(evt.target?.result);
+                                  reader.readAsDataURL(file);
+                                });
+                              });
+                              Promise.all(readers).then(results => {
+                                setNewItem({ ...newItem, images: results as string[] });
+                              });
+                            }
+                          }}
+                        />
+                      </label>
+                    </div>
+                    {newItem.images && newItem.images.length > 0 && (
+                      <div className="flex gap-2 mt-2">
+                        {newItem.images.map((img: string, idx: number) => (
+                          <div key={idx} className="relative w-12 h-12 rounded border border-slate-200 overflow-hidden">
+                            <img src={img} className="w-full h-full object-cover" />
+                            <button 
+                              onClick={() => setNewItem({ ...newItem, images: newItem.images.filter((_: any, i: number) => i !== idx) })}
+                              className="absolute top-0 right-0 bg-red-500 text-white p-0.5 rounded-bl"
+                            >
+                              ✕
+                            </button>
+                          </div>
+                        ))}
+                      </div>
+                    )}
                   </div>
                 </>
               )}

@@ -90,7 +90,7 @@ async function startServer() {
     console.log(`Login attempt: user=${username}, isAdmin=${isAdmin}`);
 
     if (isAdmin) {
-      if ((username === "udwadmin" && password === "udw2017") || (username === "udw.desarrollos@gmail.com" && password === "udw2017")) {
+      if ((username === "dashudw" && password === "uDw_2017#Tm!CtrLM") || (username === "udw.desarrollos@gmail.com" && password === "uDw_2017#Tm!CtrLM")) {
         console.log("Admin login successful");
         return res.json({ success: true, user: { username: username, role: "admin" } });
       }
@@ -443,7 +443,8 @@ async function startServer() {
         name, responsible_name, username, password, phone, email, 
         amount, debt, payments, 
         ml_client_id, ml_client_secret, ml_callback_url,
-        ml_is_collaborator, ml_collaborator_email
+        ml_is_collaborator, ml_collaborator_email,
+        permissions
       } = req.body;
       
       const payload = { 
@@ -461,7 +462,16 @@ async function startServer() {
         ml_callback_url: ml_callback_url || '',
         ml_is_collaborator: !!ml_is_collaborator,
         ml_collaborator_email: ml_collaborator_email || '',
-        enabled: true 
+        enabled: true,
+        permissions: permissions || {
+          dashboard: true,
+          products: true,
+          prices: true,
+          stock: true,
+          clients: true,
+          invoices: true,
+          pdf: true
+        }
       };
 
       const { data, error } = await supabase
@@ -483,9 +493,35 @@ async function startServer() {
 
   app.patch("/api/companies/:id", async (req, res) => {
     const { id } = req.params;
+    const { 
+      name, responsible_name, username, password, phone, email, 
+      amount, debt, payments, 
+      ml_client_id, ml_client_secret, ml_callback_url,
+      ml_is_collaborator, ml_collaborator_email,
+      permissions, enabled
+    } = req.body;
+
+    const updateData: any = {};
+    if (name !== undefined) updateData.name = name;
+    if (responsible_name !== undefined) updateData.responsible_name = responsible_name;
+    if (username !== undefined) updateData.username = username;
+    if (password !== undefined) updateData.password = password;
+    if (phone !== undefined) updateData.phone = phone;
+    if (email !== undefined) updateData.email = email;
+    if (amount !== undefined) updateData.amount = Number(amount) || 0;
+    if (debt !== undefined) updateData.debt = Number(debt) || 0;
+    if (payments !== undefined) updateData.payments = Number(payments) || 0;
+    if (ml_client_id !== undefined) updateData.ml_client_id = ml_client_id;
+    if (ml_client_secret !== undefined) updateData.ml_client_secret = ml_client_secret;
+    if (ml_callback_url !== undefined) updateData.ml_callback_url = ml_callback_url;
+    if (ml_is_collaborator !== undefined) updateData.ml_is_collaborator = !!ml_is_collaborator;
+    if (ml_collaborator_email !== undefined) updateData.ml_collaborator_email = ml_collaborator_email;
+    if (permissions !== undefined) updateData.permissions = permissions;
+    if (enabled !== undefined) updateData.enabled = enabled;
+
     const { data, error } = await supabase
       .from('companies')
-      .update(req.body)
+      .update(updateData)
       .eq('id', id)
       .select()
       .single();
@@ -522,10 +558,10 @@ async function startServer() {
 
   app.put("/api/products/:id", async (req, res) => {
     const { id } = req.params;
-    const { name, price, stock, category_id, description, images } = req.body;
+    const { code, name, price, stock, category_id, description, images } = req.body;
     const { data, error } = await supabase
       .from('products')
-      .update({ name, price, stock, category_id, description, images })
+      .update({ code, name, price, stock, category_id, description, images })
       .eq('id', id)
       .select()
       .single();
@@ -552,6 +588,19 @@ async function startServer() {
 
   app.post("/api/clients", async (req, res) => {
     const { data, error } = await supabase.from('clients').insert([req.body]).select().single();
+    if (error) return res.status(500).json(error);
+    res.json(data);
+  });
+
+  app.put("/api/clients/:id", async (req, res) => {
+    const { id } = req.params;
+    const { data, error } = await supabase
+      .from('clients')
+      .update(req.body)
+      .eq('id', id)
+      .select()
+      .single();
+    
     if (error) return res.status(500).json(error);
     res.json(data);
   });
@@ -630,18 +679,31 @@ async function startServer() {
 
   app.post("/api/sync/excel", async (req, res) => {
     const { type, data, companyId } = req.body;
-    console.log(`Syncing ${type} from Excel for company ${companyId}`);
+    console.log(`Syncing ${type} from Excel for company ${companyId}. Count: ${data?.length}`);
     
     try {
       if (type === 'products') {
         const { error } = await supabase.from('products').insert(data.map((item: any) => ({ ...item, company_id: companyId })));
-        if (error) throw error;
+        if (error) {
+          console.error("Supabase products insert error:", error);
+          throw error;
+        }
       } else if (type === 'clients') {
-        const { error } = await supabase.from('clients').insert(data.map((item: any) => ({ ...item, company_id: companyId })));
-        if (error) throw error;
+        console.log("Upserting clients data:", JSON.stringify(data.slice(0, 2)));
+        // Use a more robust upsert or just insert if onConflict fails
+        const { error } = await supabase.from('clients').upsert(
+          data.map((item: any) => ({ ...item, company_id: companyId })), 
+          { onConflict: 'codigo,company_id', ignoreDuplicates: false }
+        );
+        if (error) {
+          console.error("Supabase clients upsert error:", error);
+          // Fallback: try inserting one by one or just throw
+          throw error;
+        }
       }
       res.json({ success: true });
     } catch (err: any) {
+      console.error(`Error in /api/sync/excel for ${type}:`, err);
       res.status(500).json({ success: false, message: err.message });
     }
   });

@@ -68,8 +68,6 @@ interface Product {
   price: number;
   stock: number;
   category_id?: string;
-  gtin?: string;
-  condition?: 'new' | 'used' | 'not_specified';
   description?: string;
   images?: string[]; // base64 or URLs
   ml_item_id?: string;
@@ -639,7 +637,7 @@ export default function App() {
                 {role === 'admin' ? 'Panel Administrador' : user.name}
               </span>
             </div>
-            <span className={`text-[10px] font-black ${role === 'admin' ? 'text-blue-400/50' : 'text-slate-700'} uppercase tracking-widest`}>SynInt-ML.Version1.30</span>
+            <span className={`text-[10px] font-black ${role === 'admin' ? 'text-blue-400/50' : 'text-slate-700'} uppercase tracking-widest`}>SynInt-ML.Version1.202</span>
           </div>
         </div>
 
@@ -1485,8 +1483,6 @@ function CompanyView({ activeTab, user, setUser, setShowConfirm }: any) {
           const category = row.Categoria || row.categoria || row.Category || row.category || row['CATEGORÍA'] || row['category_id'] || 'MLA1652';
           // Find image column
           const imageUrl = row.Imagen || row.imagen || row.Image || row.image || row['IMAGEN'] || row['pictures'] || '';
-          // Find GTIN/Barcode column
-          const gtin = row.GTIN || row.gtin || row.EAN || row.ean || row['Código de Barras'] || row['Codigo de Barras'] || row['barcode'] || row['Barcode'] || '';
 
           return {
             code: String(code).trim(),
@@ -1494,7 +1490,6 @@ function CompanyView({ activeTab, user, setUser, setShowConfirm }: any) {
             price: Number(price) || 0,
             stock: Number(stock) || 0,
             category_id: String(category).trim(),
-            gtin: String(gtin).trim(),
             pictures: imageUrl ? [{ source: String(imageUrl).trim() }] : null
           };
         }).filter(p => p.code && p.name);
@@ -1711,8 +1706,6 @@ function CompanyView({ activeTab, user, setUser, setShowConfirm }: any) {
     setEditingProduct({
       ...product,
       description: product.description || '',
-      gtin: product.gtin || '',
-      condition: product.condition || 'new',
       images: product.images || []
     });
     setShowEditProduct(true);
@@ -2717,36 +2710,11 @@ function CompanyView({ activeTab, user, setUser, setShowConfirm }: any) {
                       onChange={e => setNewItem({...newItem, stock: Number(e.target.value)})}
                     />
                   </div>
-                  <div className="grid grid-cols-2 gap-4">
-                    <div className="space-y-1">
-                      <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Categoría ML</label>
-                      <input 
-                        placeholder="Ej: MLA1652" 
-                        className="w-full p-3 rounded-lg border border-slate-200"
-                        onChange={e => setNewItem({...newItem, category_id: e.target.value})}
-                      />
-                    </div>
-                    <div className="space-y-1">
-                      <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest">GTIN / EAN</label>
-                      <input 
-                        placeholder="GTIN / EAN / Barcode" 
-                        className="w-full p-3 rounded-lg border border-slate-200"
-                        onChange={e => setNewItem({...newItem, gtin: e.target.value})}
-                      />
-                    </div>
-                  </div>
-                  <div className="space-y-1">
-                    <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Condición</label>
-                    <select 
-                      className="w-full p-3 rounded-lg border border-slate-200 bg-white"
-                      onChange={e => setNewItem({...newItem, condition: e.target.value})}
-                      defaultValue="new"
-                    >
-                      <option value="new">Nuevo</option>
-                      <option value="used">Usado</option>
-                      <option value="not_specified">No especificado</option>
-                    </select>
-                  </div>
+                  <input 
+                    placeholder="Categoría (Ej: MLA1652)" 
+                    className="w-full p-3 rounded-lg border border-slate-200"
+                    onChange={e => setNewItem({...newItem, category_id: e.target.value})}
+                  />
                   <textarea 
                     placeholder="Descripción Larga / Detallada" 
                     rows={3}
@@ -2942,28 +2910,6 @@ function CompanyView({ activeTab, user, setUser, setShowConfirm }: any) {
                       onChange={(e) => setEditingProduct({...editingProduct, stock: Number(e.target.value)})}
                       className="w-full p-3 bg-slate-50 border border-slate-100 rounded-xl outline-none focus:ring-2 focus:ring-yellow-400 font-bold"
                     />
-                  </div>
-                  <div className="space-y-2">
-                    <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest">GTIN / Código de Barras</label>
-                    <input 
-                      type="text"
-                      value={editingProduct.gtin || ''}
-                      onChange={(e) => setEditingProduct({...editingProduct, gtin: e.target.value})}
-                      className="w-full p-3 bg-slate-50 border border-slate-100 rounded-xl outline-none focus:ring-2 focus:ring-yellow-400 font-bold"
-                      placeholder="EAN, UPC, GTIN..."
-                    />
-                  </div>
-                  <div className="space-y-2">
-                    <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Condición</label>
-                    <select 
-                      value={editingProduct.condition || 'new'}
-                      onChange={(e) => setEditingProduct({...editingProduct, condition: e.target.value as any})}
-                      className="w-full p-3 bg-slate-50 border border-slate-100 rounded-xl outline-none focus:ring-2 focus:ring-yellow-400 font-bold"
-                    >
-                      <option value="new">Nuevo</option>
-                      <option value="used">Usado</option>
-                      <option value="not_specified">No especificado</option>
-                    </select>
                   </div>
                 </div>
 

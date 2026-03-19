@@ -348,24 +348,12 @@ async function startServer() {
           seller_custom_field: item.code,
         };
 
-        // Handle GTIN/Identifiers
-        if (item.gtin) {
-          const attributes = mlItem.attributes || [];
-          const gtinAttrIndex = attributes.findIndex((a: any) => a.id === 'GTIN');
-          if (gtinAttrIndex !== -1) {
-            attributes[gtinAttrIndex].value_name = item.gtin;
-          } else {
-            attributes.push({ id: 'GTIN', value_name: item.gtin });
-          }
-          mlItem.attributes = attributes;
-        }
-
         if (!isUpdate) {
           mlItem.category_id = item.category_id || "MLA1652";
           mlItem.currency_id = "ARS";
           mlItem.buying_mode = "buy_it_now";
           mlItem.listing_type_id = "gold_special";
-          mlItem.condition = item.condition || "new";
+          mlItem.condition = "new";
           
           if (item.images && item.images.length > 0) {
             mlItem.pictures = item.images.map((img: string) => ({ source: img }));
@@ -570,10 +558,10 @@ async function startServer() {
 
   app.put("/api/products/:id", async (req, res) => {
     const { id } = req.params;
-    const { code, name, price, stock, category_id, gtin, condition, description, images } = req.body;
+    const { code, name, price, stock, category_id, description, images } = req.body;
     const { data, error } = await supabase
       .from('products')
-      .update({ code, name, price, stock, category_id, gtin, condition, description, images })
+      .update({ code, name, price, stock, category_id, description, images })
       .eq('id', id)
       .select()
       .single();

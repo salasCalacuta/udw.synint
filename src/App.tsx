@@ -1540,10 +1540,23 @@ function CompanyView({ activeTab, user, setUser, setShowConfirm }: any) {
       if (activeTab === 'products') endpoint = `/api/products?companyId=${user.id}`;
       if (activeTab === 'clients') endpoint = `/api/clients?companyId=${user.id}`;
       if (activeTab === 'invoices') endpoint = `/api/invoices?companyId=${user.id}`;
-      if (activeTab === 'prices' || activeTab === 'stock') endpoint = `/api/ml/items?companyId=${user.id}`;
+      if (activeTab === 'prices' || activeTab === 'stock') {
+        if (!user.ml_access_token) {
+          setListData([]);
+          setIsLoading(false);
+          return;
+        }
+        endpoint = `/api/ml/items?companyId=${user.id}`;
+      }
       
       if (endpoint) {
         const res = await fetch(endpoint);
+        if (res.status === 401) {
+          setUser({ ...user, ml_access_token: null });
+          setListData([]);
+          setIsLoading(false);
+          return;
+        }
         const data = await res.json();
         setListData(Array.isArray(data) ? data : []);
       }
@@ -1736,6 +1749,14 @@ function CompanyView({ activeTab, user, setUser, setShowConfirm }: any) {
             items: itemsToSync
           })
         });
+        
+        if (res.status === 401) {
+          alert('Su sesión de Mercado Libre ha expirado o no es válida. Por favor vuelva a vincular su cuenta.');
+          setUser({ ...user, ml_access_token: null });
+          setIsSyncing(false);
+          return;
+        }
+
         const data = await res.json();
         
         const successCount = data.results ? data.results.filter((r: any) => r.status === 'success').length : 0;
@@ -1945,6 +1966,19 @@ function CompanyView({ activeTab, user, setUser, setShowConfirm }: any) {
               
               {isLoading ? (
                 <div className="p-12 text-center text-slate-400 font-bold">Cargando datos...</div>
+              ) : (activeTab === 'prices' || activeTab === 'stock') && !user.ml_access_token ? (
+                <div 
+                  onClick={() => handleSync()}
+                  className="border-2 border-dashed border-slate-200 rounded-2xl p-12 text-center hover:border-yellow-400 transition-colors cursor-pointer group"
+                >
+                  <div className="w-16 h-16 bg-yellow-100 text-yellow-600 rounded-full flex items-center justify-center mx-auto mb-4 group-hover:scale-110 transition-transform">
+                    <Lock size={32} />
+                  </div>
+                  <p className="text-slate-600 font-bold uppercase tracking-widest">No autorizado en Mercado Libre</p>
+                  <p className="text-slate-400 text-sm mt-1">
+                    Haga clic aquí para vincular su cuenta de Mercado Libre y comenzar a sincronizar.
+                  </p>
+                </div>
               ) : listData.length === 0 && activeTab !== 'invoices' ? (
                 <div className="border-2 border-dashed border-slate-200 rounded-2xl p-12 text-center hover:border-yellow-400 transition-colors cursor-pointer group">
                   <div className="w-16 h-16 bg-yellow-100 text-yellow-600 rounded-full flex items-center justify-center mx-auto mb-4 group-hover:scale-110 transition-transform">

@@ -332,8 +332,8 @@ async function startServer() {
         .eq('id', companyId)
         .single();
 
-      if (compError || !company) throw new Error("Empresa no encontrada");
-      if (!company.ml_access_token) throw new Error("No autorizado en Mercado Libre");
+      if (compError || !company) return res.status(404).json({ error: "Empresa no encontrada" });
+      if (!company.ml_access_token) return res.status(401).json({ error: "No autorizado en Mercado Libre" });
 
       for (const item of items) {
         const isUpdate = !!item.id && item.id.startsWith('MLA');
@@ -376,6 +376,10 @@ async function startServer() {
           },
           body: JSON.stringify(mlItem)
         });
+
+        if (response.status === 401) {
+          return res.status(401).json({ error: "No autorizado en Mercado Libre" });
+        }
 
         const data = await response.json();
         if (data.id) {
@@ -651,13 +655,18 @@ async function startServer() {
         .eq('id', companyId)
         .single();
 
-      if (compError || !company) throw new Error("Empresa no encontrada");
-      if (!company.ml_access_token || !company.ml_user_id) throw new Error("No autorizado en Mercado Libre");
+      if (compError || !company) return res.status(404).json({ error: "Empresa no encontrada" });
+      if (!company.ml_access_token || !company.ml_user_id) return res.status(401).json({ error: "No autorizado en Mercado Libre" });
 
       // Fetch items IDs for the user
       const searchRes = await fetch(`https://api.mercadolibre.com/users/${company.ml_user_id}/items/search`, {
         headers: { "Authorization": `Bearer ${company.ml_access_token}` }
       });
+      
+      if (searchRes.status === 401) {
+        return res.status(401).json({ error: "No autorizado en Mercado Libre" });
+      }
+
       const searchData = await searchRes.json();
       
       if (!searchData.results || searchData.results.length === 0) {
@@ -669,6 +678,11 @@ async function startServer() {
       const itemsRes = await fetch(`https://api.mercadolibre.com/items?ids=${ids}`, {
         headers: { "Authorization": `Bearer ${company.ml_access_token}` }
       });
+      
+      if (itemsRes.status === 401) {
+        return res.status(401).json({ error: "No autorizado en Mercado Libre" });
+      }
+
       const itemsData = await itemsRes.json();
 
       // Fetch local products to relate data

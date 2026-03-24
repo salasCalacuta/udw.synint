@@ -20,7 +20,11 @@ import {
   Trash2,
   RefreshCw,
   Settings,
-  Activity
+  Activity,
+  Bell,
+  X,
+  Info,
+  AlertTriangle
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import * as XLSX from 'xlsx';
@@ -68,6 +72,8 @@ interface Product {
   price: number;
   stock: number;
   category_id?: string;
+  gtin?: string;
+  condition?: 'new' | 'used' | 'not_specified';
   description?: string;
   images?: string[]; // base64 or URLs
   ml_item_id?: string;
@@ -108,6 +114,79 @@ function StatCard({ label, value, color }: { label: string, value: any, color: s
   );
 }
 
+const NotificationsPanel: React.FC<{ 
+  notifications: any[], 
+  onClose: () => void, 
+  onMarkAsRead: (id: string) => void,
+  isAdmin: boolean
+}> = ({ notifications, onClose, onMarkAsRead, isAdmin }) => {
+  return (
+    <motion.div 
+      initial={{ opacity: 0, x: 300 }}
+      animate={{ opacity: 1, x: 0 }}
+      exit={{ opacity: 0, x: 300 }}
+      className="fixed top-0 right-0 h-full w-80 bg-white shadow-2xl z-[100] border-l border-slate-100 flex flex-col"
+    >
+      <div className="p-6 border-b border-slate-100 flex items-center justify-between bg-slate-50">
+        <h3 className="text-lg font-black text-slate-800 flex items-center gap-2">
+          <Bell size={20} className="text-yellow-500" />
+          Notificaciones
+        </h3>
+        <button onClick={onClose} className="p-2 hover:bg-slate-200 rounded-full transition-colors">
+          <X size={20} className="text-slate-500" />
+        </button>
+      </div>
+      
+      <div className="flex-1 overflow-y-auto p-4 space-y-3">
+        {notifications.length === 0 ? (
+          <div className="text-center py-10">
+            <Info size={40} className="mx-auto text-slate-200 mb-2" />
+            <p className="text-slate-400 text-xs font-bold uppercase tracking-widest">No hay notificaciones</p>
+          </div>
+        ) : (
+          notifications.map((n) => (
+            <div 
+              key={n.id} 
+              className={`p-4 rounded-xl border ${n.is_read ? 'bg-white border-slate-100' : 'bg-sky-50 border-sky-100'} transition-all relative group`}
+            >
+              <div className="flex items-start gap-3">
+                {n.type === 'error' ? (
+                  <AlertCircle size={18} className="text-red-500 shrink-0 mt-0.5" />
+                ) : n.type === 'warning' ? (
+                  <AlertTriangle size={18} className="text-yellow-500 shrink-0 mt-0.5" />
+                ) : (
+                  <Info size={18} className="text-blue-500 shrink-0 mt-0.5" />
+                )}
+                <div>
+                  <div className="text-xs font-black text-slate-800 mb-1">{n.title}</div>
+                  <p className="text-[10px] text-slate-500 leading-relaxed mb-2">{n.message}</p>
+                  {n.affected_elements && (
+                    <div className="text-[8px] font-bold text-slate-400 uppercase tracking-tighter">
+                      Afectados: {typeof n.affected_elements === 'string' ? n.affected_elements : JSON.stringify(n.affected_elements)}
+                    </div>
+                  )}
+                  <div className="text-[8px] text-slate-300 mt-2 font-bold">
+                    {new Date(n.created_at).toLocaleString()}
+                  </div>
+                </div>
+              </div>
+              {!n.is_read && (
+                <button 
+                  onClick={() => onMarkAsRead(n.id)}
+                  className="absolute top-2 right-2 p-1 opacity-0 group-hover:opacity-100 transition-opacity bg-sky-100 text-sky-600 rounded hover:bg-sky-200"
+                  title="Marcar como leída"
+                >
+                  <CheckCircle2 size={12} />
+                </button>
+              )}
+            </div>
+          ))
+        )}
+      </div>
+    </motion.div>
+  );
+};
+
 export default function App() {
   const [user, setUser] = useState<any>(null);
   const [role, setRole] = useState<UserRole>(null);
@@ -146,6 +225,59 @@ export default function App() {
   const [editingCompany, setEditingCompany] = useState<Company | null>(null);
   const [dbConnected, setDbConnected] = useState<boolean | null>(null);
   const [dbError, setDbError] = useState<string>('');
+  const [notifications, setNotifications] = useState<any[]>([]);
+  const [showNotifications, setShowNotifications] = useState(false);
+
+  const fetchNotifications = async () => {
+    if (!user) return;
+    try {
+      const res = await fetch(`/api/notifications?companyId=${user.id}&isAdmin=${role === 'admin'}`);
+      const data = await res.json();
+      if (data.success) {
+        setNotifications(data.notifications);
+      }
+    } catch (err) {
+      console.error("Error fetching notifications:", err);
+    }
+  };
+
+  useEffect(() => {
+    if (user) {
+      fetchNotifications();
+      const interval = setInterval(fetchNotifications, 30000); // Check every 30 seconds
+      return () => clearInterval(interval);
+    }
+  }, [user, role]);
+
+  const markNotificationAsRead = async (id: string) => {
+    try {
+      const res = await fetch(`/api/notifications/${id}/read`, { method: 'PATCH' });
+      if (res.ok) {
+        setNotifications(prev => prev.map(n => n.id === id ? { ...n, is_read: true } : n));
+      }
+    } catch (err) {
+      console.error("Error marking notification as read:", err);
+    }
+  };
+
+  const createNotification = async (type: 'error' | 'warning' | 'info', title: string, message: string, affected: any) => {
+    try {
+      await fetch('/api/notifications', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          company_id: user?.id,
+          type,
+          title,
+          message,
+          affected_elements: affected
+        })
+      });
+      fetchNotifications();
+    } catch (err) {
+      console.error("Error creating notification:", err);
+    }
+  };
   const [isCheckingDb, setIsCheckingDb] = useState(true);
 
   // Check DB Connection
@@ -214,6 +346,51 @@ export default function App() {
     }
   }, [newCompany.amount, newCompany.payments]);
 
+  const PERMISSION_KEYS = [
+    'dashboard',
+    'products',
+    'prices',
+    'stock',
+    'clients',
+    'invoices',
+    'pdf'
+  ];
+
+  const getSafePermissions = (perms: any) => {
+    const defaultPermissions = {
+      dashboard: true,
+      products: true,
+      prices: true,
+      stock: true,
+      clients: true,
+      invoices: true,
+      pdf: true
+    };
+
+    let parsed = perms;
+    if (typeof perms === 'string') {
+      try {
+        parsed = JSON.parse(perms);
+        // Handle double-stringification
+        if (typeof parsed === 'string') {
+          parsed = JSON.parse(parsed);
+        }
+      } catch (e) {
+        return defaultPermissions;
+      }
+    }
+    
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+      return defaultPermissions;
+    }
+
+    // Ensure all expected keys exist
+    return {
+      ...defaultPermissions,
+      ...parsed
+    };
+  };
+
   const fetchCompanies = async () => {
     try {
       const res = await fetch('/api/companies');
@@ -241,6 +418,16 @@ export default function App() {
     }
   };
 
+  const debugSchema = async () => {
+    try {
+      const res = await fetch('/api/debug-companies-schema');
+      const data = await res.json();
+      alert("Esquema de tabla 'companies':\n" + JSON.stringify(data, null, 2));
+    } catch (err) {
+      alert("Error al obtener esquema de la base de datos.");
+    }
+  };
+
   const [isLoading, setIsLoading] = useState(false);
 
   const handleLogin = async (isAdmin: boolean) => {
@@ -252,10 +439,33 @@ export default function App() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ username, password, isAdmin })
       });
+      
+      if (!res.ok) {
+        const resClone = res.clone();
+        let data;
+        try {
+          data = await res.json();
+        } catch (e) {
+          const text = await resClone.text().catch(() => 'No se pudo leer el cuerpo de la respuesta');
+          console.error("Error al parsear JSON de la respuesta:", text);
+          setError(`Error del servidor (${res.status}): ${text.substring(0, 100)}...`);
+          return;
+        }
+        
+        let msg = data.message || 'Error del servidor';
+        if (data.debug_columns) {
+          msg += ` (Columnas: ${data.debug_columns})`;
+        }
+        setError(msg);
+        return;
+      }
+
       const data = await res.json();
+      console.log("Login response data:", data);
       if (data.success) {
         setUser(data.user);
         setRole(isAdmin ? 'admin' : 'company');
+        console.log("User and Role set:", { user: data.user, role: isAdmin ? 'admin' : 'company' });
       } else {
         setError(data.message);
       }
@@ -382,15 +592,7 @@ export default function App() {
       ml_callback_url: company.ml_callback_url || '',
       ml_is_collaborator: company.ml_is_collaborator || false,
       ml_collaborator_email: company.ml_collaborator_email || '',
-      permissions: company.permissions || {
-        dashboard: true,
-        products: true,
-        prices: true,
-        stock: true,
-        clients: true,
-        invoices: true,
-        pdf: true
-      }
+      permissions: getSafePermissions(company.permissions)
     });
     setShowAddCompany(true);
   };
@@ -515,7 +717,7 @@ export default function App() {
                     value={username}
                     onChange={(e) => setUsername(e.target.value)}
                     className="w-full px-4 py-4 bg-black/50 rounded-xl border border-blue-500/30 text-blue-100 focus:ring-2 focus:ring-blue-500 focus:border-transparent outline-none transition-all font-medium placeholder:text-blue-900"
-                    placeholder="udwadmin"
+                    placeholder=""
                   />
                 </div>
                 <div>
@@ -620,6 +822,20 @@ export default function App() {
         </motion.div>
         
         <p className="mt-8 text-slate-400 text-[10px] font-black uppercase tracking-widest">© 2026 MLSync - udw desarrollos</p>
+        <div className="mt-4 flex gap-4">
+          <button 
+            onClick={testConnection}
+            className="text-[10px] font-bold text-slate-400 hover:text-slate-600 underline uppercase tracking-widest"
+          >
+            Probar Conexión
+          </button>
+          <button 
+            onClick={debugSchema}
+            className="text-[10px] font-bold text-slate-400 hover:text-slate-600 underline uppercase tracking-widest"
+          >
+            Ver Columnas DB
+          </button>
+        </div>
       </div>
     );
   }
@@ -634,10 +850,10 @@ export default function App() {
             <div className="flex items-center gap-2">
               <div className={`w-2 h-2 ${role === 'admin' ? 'bg-blue-500' : 'bg-green-600'} rounded-full animate-pulse`}></div>
               <span className={`text-xs font-bold ${role === 'admin' ? 'text-blue-100' : 'text-slate-800'} uppercase tracking-wider`}>
-                {role === 'admin' ? 'Panel Administrador' : user.name}
+                {role === 'admin' ? 'Panel Administrador' : (user?.name || user?.username || 'Empresa')}
               </span>
             </div>
-            <span className={`text-[10px] font-black ${role === 'admin' ? 'text-blue-400/50' : 'text-slate-700'} uppercase tracking-widest`}>SynInt-ML.Version1.202</span>
+            <span className={`text-[10px] font-black ${role === 'admin' ? 'text-blue-400/50' : 'text-slate-700'} uppercase tracking-widest`}>SynInt-ML.Version1.306</span>
           </div>
         </div>
 
@@ -658,10 +874,24 @@ export default function App() {
                 onClick={() => setActiveTab('companies')} 
                 role={role}
               />
+              <SidebarItem 
+                icon={
+                  <div className="relative">
+                    <Bell size={20} />
+                    {notifications.filter(n => !n.is_read).length > 0 && (
+                      <span className="absolute -top-1 -right-1 w-2 h-2 bg-red-500 rounded-full border border-white"></span>
+                    )}
+                  </div>
+                } 
+                label="Notificaciones" 
+                active={showNotifications} 
+                onClick={() => setShowNotifications(true)} 
+                role={role}
+              />
             </>
           ) : (
             <>
-              {(!user.permissions || user.permissions.dashboard) && (
+              {(getSafePermissions(user.permissions).dashboard) && (
                 <SidebarItem 
                   icon={<LayoutDashboard size={20} />} 
                   label="Resumen" 
@@ -671,7 +901,7 @@ export default function App() {
                 />
               )}
               <div className={`pt-4 pb-2 px-4 text-[10px] font-black ${role === 'admin' ? 'text-blue-400/30' : 'text-slate-800/50'} uppercase tracking-[0.2em]`}>Sincronización</div>
-              {(!user.permissions || user.permissions.products) && (
+              {(getSafePermissions(user.permissions).products) && (
                 <SidebarItem 
                   icon={<Package size={20} />} 
                   label="Productos" 
@@ -680,7 +910,7 @@ export default function App() {
                   role={role}
                 />
               )}
-              {(!user.permissions || user.permissions.stock || user.permissions.prices) && (
+              {(getSafePermissions(user.permissions).stock || getSafePermissions(user.permissions).prices) && (
                 <SidebarItem 
                   icon={<Boxes size={20} />} 
                   label="Stock y Precios" 
@@ -689,7 +919,16 @@ export default function App() {
                   role={role}
                 />
               )}
-              {(!user.permissions || user.permissions.invoices) && (
+              {(getSafePermissions(user.permissions).clients) && (
+                <SidebarItem 
+                  icon={<Users size={20} />} 
+                  label="Clientes" 
+                  active={activeTab === 'clients'} 
+                  onClick={() => setActiveTab('clients')} 
+                  role={role}
+                />
+              )}
+              {(getSafePermissions(user.permissions).invoices) && (
                 <SidebarItem 
                   icon={<FileText size={20} />} 
                   label="Facturas" 
@@ -698,7 +937,7 @@ export default function App() {
                   role={role}
                 />
               )}
-              {(!user.permissions || user.permissions.pdf) && (
+              {(getSafePermissions(user.permissions).pdf) && (
                 <SidebarItem 
                   icon={<FileType size={20} />} 
                   label="PDFs" 
@@ -707,7 +946,21 @@ export default function App() {
                   role={role}
                 />
               )}
-              {(!user.permissions || user.permissions.clients) && (
+              <SidebarItem 
+                icon={
+                  <div className="relative">
+                    <Bell size={20} />
+                    {notifications.filter(n => !n.is_read).length > 0 && (
+                      <span className="absolute -top-1 -right-1 w-2 h-2 bg-red-500 rounded-full border border-white"></span>
+                    )}
+                  </div>
+                } 
+                label="Notificaciones" 
+                active={showNotifications} 
+                onClick={() => setShowNotifications(true)} 
+                role={role}
+              />
+              {(getSafePermissions(user.permissions).clients) && (
                 <SidebarItem 
                   icon={<Users size={20} />} 
                   label="Clientes" 
@@ -733,6 +986,7 @@ export default function App() {
 
       {/* Main Content */}
       <div className="flex-1 overflow-y-auto p-8 relative">
+        {console.log("Rendering Main Content, role:", role, "user:", !!user)}
         <AnimatePresence mode="wait">
           {role === 'admin' ? (
             <AdminView 
@@ -754,7 +1008,16 @@ export default function App() {
                   payments: 0,
                   ml_client_id: '',
                   ml_client_secret: '',
-                  ml_callback_url: ''
+                  ml_callback_url: '',
+                  permissions: {
+                    dashboard: true,
+                    products: true,
+                    prices: true,
+                    stock: true,
+                    clients: true,
+                    invoices: true,
+                    pdf: true
+                  }
                 });
                 setShowAddCompany(true);
               }}
@@ -770,6 +1033,12 @@ export default function App() {
               user={user}
               setUser={setUser}
               setShowConfirm={setShowConfirm}
+              role={role}
+              notifications={notifications}
+              showNotifications={showNotifications}
+              setShowNotifications={setShowNotifications}
+              markNotificationAsRead={markNotificationAsRead}
+              createNotification={createNotification}
             />
           )}
         </AnimatePresence>
@@ -818,42 +1087,29 @@ export default function App() {
                     <div className="space-y-2">
                       <h4 className="text-xs font-black text-slate-400 uppercase tracking-widest">Permisos de Dashboard</h4>
                       <div className="grid grid-cols-2 gap-2">
-                        {Object.keys(newCompany.permissions || {
-                          dashboard: true,
-                          products: true,
-                          prices: true,
-                          stock: true,
-                          clients: true,
-                          invoices: true,
-                          pdf: true
-                        }).map((key) => (
+                        {PERMISSION_KEYS.map((key) => (
                           <div key={key} className="flex items-center gap-2 p-2 bg-slate-50 rounded-lg border border-slate-200">
                             <input 
                               type="checkbox"
                               id={`perm-${key}`}
-                              checked={newCompany.permissions?.[key as keyof typeof newCompany.permissions] === true || newCompany.permissions?.[key as keyof typeof newCompany.permissions] === 'true' || newCompany.permissions?.[key as keyof typeof newCompany.permissions] === undefined}
-                              onChange={e => setNewCompany({
-                                ...newCompany, 
-                                permissions: {
-                                  ...(newCompany.permissions || {
-                                    dashboard: true,
-                                    products: true,
-                                    prices: true,
-                                    stock: true,
-                                    clients: true,
-                                    invoices: true,
-                                    pdf: true
-                                  }),
-                                  [key]: e.target.checked
-                                }
-                              })}
+                              checked={!!getSafePermissions(newCompany.permissions)[key]}
+                              onChange={e => {
+                                const currentPerms = getSafePermissions(newCompany.permissions);
+                                setNewCompany({
+                                  ...newCompany, 
+                                  permissions: {
+                                    ...currentPerms,
+                                    [key]: e.target.checked
+                                  }
+                                });
+                              }}
                               className="w-4 h-4 text-yellow-400 rounded focus:ring-yellow-400"
                             />
                             <label htmlFor={`perm-${key}`} className="text-[10px] font-bold text-slate-700 cursor-pointer uppercase">
-                              {key === 'dashboard' ? 'Panel de Control' : 
+                              {key === 'dashboard' ? 'Resumen' : 
                                key === 'products' ? 'Productos' :
                                key === 'prices' ? 'Precios' :
-                               key === 'stock' ? 'Stock y Precios' :
+                               key === 'stock' ? 'Stock' :
                                key === 'clients' ? 'Clientes' :
                                key === 'invoices' ? 'Facturas' :
                                key === 'pdf' ? 'PDFs' : key}
@@ -932,9 +1188,9 @@ export default function App() {
                       />
                       <input 
                         placeholder="ML Callback URL" 
-                        className="w-full p-3 rounded-lg border border-slate-200 focus:ring-2 focus:ring-yellow-400 outline-none bg-slate-50"
+                        className="w-full p-3 rounded-lg border border-slate-200 focus:ring-2 focus:ring-yellow-400 outline-none"
                         value={newCompany.ml_callback_url}
-                        readOnly
+                        onChange={e => setNewCompany({...newCompany, ml_callback_url: e.target.value})}
                       />
                       <div className="flex items-center gap-2 p-2 bg-slate-50 rounded-lg border border-slate-200">
                         <input 
@@ -1404,7 +1660,26 @@ function AdminView({ activeTab, companies, toggleStatus, showAdd, onEdit, onDele
   );
 }
 
-function CompanyView({ activeTab, user, setUser, setShowConfirm }: any) {
+function CompanyView({ 
+  activeTab, 
+  user, 
+  setUser, 
+  setShowConfirm,
+  role,
+  notifications,
+  showNotifications,
+  setShowNotifications,
+  markNotificationAsRead,
+  createNotification
+}: any) {
+  console.log("CompanyView rendering with:", { activeTab, userId: user?.id, role: user?.role, userName: user?.name });
+  console.log("Full user object:", JSON.stringify(user));
+  
+  if (!user) {
+    console.error("CompanyView: User is null!");
+    return <div className="p-8 text-center text-red-500 font-bold">Error: Usuario no encontrado. Por favor reingrese.</div>;
+  }
+
   const [syncData, setSyncData] = useState<any>(null);
   const [syncHistory, setSyncHistory] = useState<any[]>([]);
   const [isSyncing, setIsSyncing] = useState(false);
@@ -1415,7 +1690,25 @@ function CompanyView({ activeTab, user, setUser, setShowConfirm }: any) {
   const [showManualAdd, setShowManualAdd] = useState(false);
   const [showEditProduct, setShowEditProduct] = useState(false);
   const [editingProduct, setEditingProduct] = useState<Product | null>(null);
-  const [newItem, setNewItem] = useState<any>({});
+  const [newItem, setNewItem] = useState<any>({
+    code: '',
+    name: '',
+    price: 0,
+    stock: 0,
+    category_id: '',
+    gtin: '',
+    condition: 'new',
+    description: '',
+    images: [],
+    codigo: '',
+    nombre: '',
+    mail: '',
+    direccion: '',
+    localidad: '',
+    telefono: '',
+    number: '',
+    total: 0
+  });
   const [recentManualItems, setRecentManualItems] = useState<any[]>([]);
   const [mlSales, setMlSales] = useState<any[]>([]);
   const [dateRange, setDateRange] = useState({ start: '', end: '' });
@@ -1483,6 +1776,8 @@ function CompanyView({ activeTab, user, setUser, setShowConfirm }: any) {
           const category = row.Categoria || row.categoria || row.Category || row.category || row['CATEGORÍA'] || row['category_id'] || 'MLA1652';
           // Find image column
           const imageUrl = row.Imagen || row.imagen || row.Image || row.image || row['IMAGEN'] || row['pictures'] || '';
+          // Find GTIN/Barcode column
+          const gtin = row.GTIN || row.gtin || row.EAN || row.ean || row['Código de Barras'] || row['Codigo de Barras'] || row['barcode'] || row['Barcode'] || '';
 
           return {
             code: String(code).trim(),
@@ -1490,6 +1785,7 @@ function CompanyView({ activeTab, user, setUser, setShowConfirm }: any) {
             price: Number(price) || 0,
             stock: Number(stock) || 0,
             category_id: String(category).trim(),
+            gtin: String(gtin).trim(),
             pictures: imageUrl ? [{ source: String(imageUrl).trim() }] : null
           };
         }).filter(p => p.code && p.name);
@@ -1667,6 +1963,12 @@ function CompanyView({ activeTab, user, setUser, setShowConfirm }: any) {
       alert('Ventas descargadas y exportadas a Excel');
     } catch (err) {
       console.error("Error downloading ML sales:", err);
+      createNotification(
+        'error',
+        'Error de Descarga Ventas',
+        `No se pudieron descargar las ventas de Mercado Libre para el rango ${dateRange.start} - ${dateRange.end}.`,
+        []
+      );
     }
   };
 
@@ -1699,6 +2001,12 @@ function CompanyView({ activeTab, user, setUser, setShowConfirm }: any) {
       }
     } catch (err) {
       console.error("Error uploading PDF:", err);
+      createNotification(
+        'error',
+        'Error de Carga PDF',
+        `No se pudo cargar la factura ${file.name} para la venta ${saleId}.`,
+        [saleId]
+      );
     }
   };
 
@@ -1706,6 +2014,8 @@ function CompanyView({ activeTab, user, setUser, setShowConfirm }: any) {
     setEditingProduct({
       ...product,
       description: product.description || '',
+      gtin: product.gtin || '',
+      condition: product.condition || 'new',
       images: product.images || []
     });
     setShowEditProduct(true);
@@ -1776,8 +2086,13 @@ function CompanyView({ activeTab, user, setUser, setShowConfirm }: any) {
   };
 
   const fetchStats = async () => {
+    if (!user || !user.id) return;
     try {
       const res = await fetch(`/api/company-stats?companyId=${user.id}`);
+      if (!res.ok) {
+        console.error(`Stats fetch failed with status: ${res.status}`);
+        return;
+      }
       const data = await res.json();
       setStats(data);
     } catch (err) {
@@ -2011,6 +2326,30 @@ function CompanyView({ activeTab, user, setUser, setShowConfirm }: any) {
           return;
         }
 
+        // Export to Excel first
+        const now = new Date();
+        const timestamp = `${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}-${String(now.getHours()).padStart(2, '0')}_${String(now.getMinutes()).padStart(2, '0')}_${String(now.getSeconds()).padStart(2, '0')}`;
+        const filename = `publicar-${timestamp}.xlsx`;
+
+        try {
+          const exportRes = await fetch('/api/export-excel', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              items: itemsToSync,
+              filename: filename
+            })
+          });
+          const exportData = await exportRes.json();
+          if (!exportData.success) {
+            console.error("Excel export failed:", exportData.message);
+          } else {
+            console.log("Excel exported to:", exportData.path);
+          }
+        } catch (exportErr) {
+          console.error("Error calling export-excel:", exportErr);
+        }
+
         const res = await fetch('/api/ml/sync-items', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
@@ -2046,13 +2385,33 @@ function CompanyView({ activeTab, user, setUser, setShowConfirm }: any) {
         
         if (data.success) {
           if (!itemCode) alert(`Sincronización finalizada. Éxitos: ${successCount}, Errores: ${errorCount}`);
+          if (errorCount > 0) {
+            createNotification(
+              'warning',
+              'Sincronización con Errores',
+              `Se sincronizaron ${successCount} items con éxito, pero ${errorCount} fallaron.`,
+              data.results.filter((r: any) => r.status === 'error').map((r: any) => r.code)
+            );
+          }
           fetchList();
           fetchStats();
         } else {
           alert('Error en la sincronización: ' + data.message);
+          createNotification(
+            'error',
+            'Error Crítico de Sincronización',
+            `No se pudo completar la sincronización: ${data.message}`,
+            itemCode ? [itemCode] : Array.from(selectedItems)
+          );
         }
       } catch (err) {
         alert('Error de conexión al sincronizar');
+        createNotification(
+          'error',
+          'Error de Conexión',
+          'No se pudo conectar con el servidor para la sincronización.',
+          itemCode ? [itemCode] : Array.from(selectedItems)
+        );
       } finally {
         setIsSyncing(false);
       }
@@ -2710,11 +3069,36 @@ function CompanyView({ activeTab, user, setUser, setShowConfirm }: any) {
                       onChange={e => setNewItem({...newItem, stock: Number(e.target.value)})}
                     />
                   </div>
-                  <input 
-                    placeholder="Categoría (Ej: MLA1652)" 
-                    className="w-full p-3 rounded-lg border border-slate-200"
-                    onChange={e => setNewItem({...newItem, category_id: e.target.value})}
-                  />
+                  <div className="grid grid-cols-2 gap-4">
+                    <div className="space-y-1">
+                      <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Categoría ML</label>
+                      <input 
+                        placeholder="Ej: MLA1652" 
+                        className="w-full p-3 rounded-lg border border-slate-200"
+                        onChange={e => setNewItem({...newItem, category_id: e.target.value})}
+                      />
+                    </div>
+                    <div className="space-y-1">
+                      <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest">GTIN / EAN</label>
+                      <input 
+                        placeholder="GTIN / EAN / Barcode" 
+                        className="w-full p-3 rounded-lg border border-slate-200"
+                        onChange={e => setNewItem({...newItem, gtin: e.target.value})}
+                      />
+                    </div>
+                  </div>
+                  <div className="space-y-1">
+                    <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Condición</label>
+                    <select 
+                      className="w-full p-3 rounded-lg border border-slate-200 bg-white"
+                      onChange={e => setNewItem({...newItem, condition: e.target.value})}
+                      defaultValue="new"
+                    >
+                      <option value="new">Nuevo</option>
+                      <option value="used">Usado</option>
+                      <option value="not_specified">No especificado</option>
+                    </select>
+                  </div>
                   <textarea 
                     placeholder="Descripción Larga / Detallada" 
                     rows={3}
@@ -2773,31 +3157,37 @@ function CompanyView({ activeTab, user, setUser, setShowConfirm }: any) {
                   <input 
                     placeholder="Código de Cliente" 
                     className="w-full p-3 rounded-lg border border-slate-200"
+                    value={newItem.codigo || ''}
                     onChange={e => setNewItem({...newItem, codigo: e.target.value})}
                   />
                   <input 
                     placeholder="Nombre del Cliente" 
                     className="w-full p-3 rounded-lg border border-slate-200"
+                    value={newItem.nombre || ''}
                     onChange={e => setNewItem({...newItem, nombre: e.target.value})}
                   />
                   <input 
                     placeholder="Email / Mail" 
                     className="w-full p-3 rounded-lg border border-slate-200"
+                    value={newItem.mail || ''}
                     onChange={e => setNewItem({...newItem, mail: e.target.value})}
                   />
                   <input 
                     placeholder="Dirección" 
                     className="w-full p-3 rounded-lg border border-slate-200"
+                    value={newItem.direccion || ''}
                     onChange={e => setNewItem({...newItem, direccion: e.target.value})}
                   />
                   <input 
                     placeholder="Localidad" 
                     className="w-full p-3 rounded-lg border border-slate-200"
+                    value={newItem.localidad || ''}
                     onChange={e => setNewItem({...newItem, localidad: e.target.value})}
                   />
                   <input 
                     placeholder="Teléfono" 
                     className="w-full p-3 rounded-lg border border-slate-200"
+                    value={newItem.telefono || ''}
                     onChange={e => setNewItem({...newItem, telefono: e.target.value})}
                   />
                 </>
@@ -2807,12 +3197,14 @@ function CompanyView({ activeTab, user, setUser, setShowConfirm }: any) {
                   <input 
                     placeholder="Número de Factura" 
                     className="w-full p-3 rounded-lg border border-slate-200"
+                    value={newItem.number || ''}
                     onChange={e => setNewItem({...newItem, number: e.target.value})}
                   />
                   <input 
                     type="number"
                     placeholder="Total" 
                     className="w-full p-3 rounded-lg border border-slate-200"
+                    value={newItem.total || 0}
                     onChange={e => setNewItem({...newItem, total: Number(e.target.value)})}
                   />
                 </>
@@ -2878,7 +3270,7 @@ function CompanyView({ activeTab, user, setUser, setShowConfirm }: any) {
                     <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Nombre del Producto</label>
                     <input 
                       type="text"
-                      value={editingProduct.name}
+                      value={editingProduct.name || ''}
                       onChange={(e) => setEditingProduct({...editingProduct, name: e.target.value})}
                       className="w-full p-3 bg-slate-50 border border-slate-100 rounded-xl outline-none focus:ring-2 focus:ring-yellow-400 font-bold"
                     />
@@ -2887,7 +3279,7 @@ function CompanyView({ activeTab, user, setUser, setShowConfirm }: any) {
                     <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Categoría ML</label>
                     <input 
                       type="text"
-                      value={editingProduct.category_id}
+                      value={editingProduct.category_id || ''}
                       onChange={(e) => setEditingProduct({...editingProduct, category_id: e.target.value})}
                       className="w-full p-3 bg-slate-50 border border-slate-100 rounded-xl outline-none focus:ring-2 focus:ring-yellow-400 font-bold"
                       placeholder="Ej: MLA1652"
@@ -2897,7 +3289,7 @@ function CompanyView({ activeTab, user, setUser, setShowConfirm }: any) {
                     <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Precio</label>
                     <input 
                       type="number"
-                      value={editingProduct.price}
+                      value={editingProduct.price || 0}
                       onChange={(e) => setEditingProduct({...editingProduct, price: Number(e.target.value)})}
                       className="w-full p-3 bg-slate-50 border border-slate-100 rounded-xl outline-none focus:ring-2 focus:ring-yellow-400 font-bold"
                     />
@@ -2906,17 +3298,39 @@ function CompanyView({ activeTab, user, setUser, setShowConfirm }: any) {
                     <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Stock</label>
                     <input 
                       type="number"
-                      value={editingProduct.stock}
+                      value={editingProduct.stock || 0}
                       onChange={(e) => setEditingProduct({...editingProduct, stock: Number(e.target.value)})}
                       className="w-full p-3 bg-slate-50 border border-slate-100 rounded-xl outline-none focus:ring-2 focus:ring-yellow-400 font-bold"
                     />
+                  </div>
+                  <div className="space-y-2">
+                    <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest">GTIN / Código de Barras</label>
+                    <input 
+                      type="text"
+                      value={editingProduct.gtin || ''}
+                      onChange={(e) => setEditingProduct({...editingProduct, gtin: e.target.value})}
+                      className="w-full p-3 bg-slate-50 border border-slate-100 rounded-xl outline-none focus:ring-2 focus:ring-yellow-400 font-bold"
+                      placeholder="EAN, UPC, GTIN..."
+                    />
+                  </div>
+                  <div className="space-y-2">
+                    <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Condición</label>
+                    <select 
+                      value={editingProduct.condition || 'new'}
+                      onChange={(e) => setEditingProduct({...editingProduct, condition: e.target.value as any})}
+                      className="w-full p-3 bg-slate-50 border border-slate-100 rounded-xl outline-none focus:ring-2 focus:ring-yellow-400 font-bold"
+                    >
+                      <option value="new">Nuevo</option>
+                      <option value="used">Usado</option>
+                      <option value="not_specified">No especificado</option>
+                    </select>
                   </div>
                 </div>
 
                 <div className="space-y-2">
                   <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Descripción Larga</label>
                   <textarea 
-                    value={editingProduct.description}
+                    value={editingProduct.description || ''}
                     onChange={(e) => setEditingProduct({...editingProduct, description: e.target.value})}
                     rows={4}
                     className="w-full p-3 bg-slate-50 border border-slate-100 rounded-xl outline-none focus:ring-2 focus:ring-yellow-400 font-medium text-sm"
@@ -2969,6 +3383,16 @@ function CompanyView({ activeTab, user, setUser, setShowConfirm }: any) {
               </div>
             </motion.div>
           </div>
+        )}
+      </AnimatePresence>
+      <AnimatePresence>
+        {showNotifications && (
+          <NotificationsPanel 
+            notifications={notifications} 
+            onClose={() => setShowNotifications(false)} 
+            onMarkAsRead={markNotificationAsRead}
+            isAdmin={role === 'admin'}
+          />
         )}
       </AnimatePresence>
     </motion.div>

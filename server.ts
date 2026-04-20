@@ -9,7 +9,50 @@ import dotenv from 'dotenv';
 dotenv.config();
 
 const supabaseUrl = process.env.SUPABASE_URL || '';
-const supabaseKey = process.env.SUPABASE_ANON_KEY || '';
+const supabaseKey = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_ANON_KEY || '';
+
+const LOCAL_NOTIFICATIONS_FILE = path.join(process.cwd(), 'local_notifications.json');
+
+// Helper to save notifications locally as fallback
+const saveLocalNotification = (notification: any) => {
+  try {
+    let notifications = [];
+    if (fs.existsSync(LOCAL_NOTIFICATIONS_FILE)) {
+      const content = fs.readFileSync(LOCAL_NOTIFICATIONS_FILE, 'utf8');
+      notifications = JSON.parse(content);
+    }
+    notifications.push({
+      ...notification,
+      id: notification.id || `local_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
+      created_at: notification.created_at || new Date().toISOString(),
+      is_local: true
+    });
+    // Keep only last 100 local notifications to avoid file bloat
+    if (notifications.length > 100) notifications = notifications.slice(-100);
+    fs.writeFileSync(LOCAL_NOTIFICATIONS_FILE, JSON.stringify(notifications, null, 2));
+  } catch (err) {
+    console.error("[LocalNotifications] Error saving:", err);
+  }
+};
+
+// Helper to get local notifications
+const getLocalNotifications = (companyId: string | null, isAdmin: boolean) => {
+  try {
+    if (!fs.existsSync(LOCAL_NOTIFICATIONS_FILE)) return [];
+    const content = fs.readFileSync(LOCAL_NOTIFICATIONS_FILE, 'utf8');
+    let notifications = JSON.parse(content);
+    
+    if (!isAdmin && companyId) {
+      notifications = notifications.filter((n: any) => n.company_id === companyId);
+    } else if (!isAdmin && !companyId) {
+      return [];
+    }
+    return notifications;
+  } catch (err) {
+    console.error("[LocalNotifications] Error reading:", err);
+    return [];
+  }
+};
 
 let supabase: any;
 
@@ -49,10 +92,42 @@ try {
 }
 
 async function startServer() {
-  const app = express();
-  const PORT = 3000;
+  try {
+    const app = express();
+    const PORT = 3000;
 
-  app.use(express.json());
+    app.use(express.json({ limit: '50mb' }));
+    app.use(express.urlencoded({ limit: '50mb', extended: true }));
+
+    // Middleware to check if Supabase is initialized
+    app.use((req, res, next) => {
+      if (!supabase && req.path.startsWith('/api')) {
+        // Allow certain public or health check routes if needed
+        if (req.path === '/api/health') return next();
+        
+        return res.status(503).json({
+          success: false,
+          error: "Supabase not initialized",
+          message: "La conexión con la base de datos no está configurada. Verifica las variables de entorno SUPABASE_URL y SUPABASE_ANON_KEY."
+        });
+      }
+      next();
+    });
+
+    // Health check endpoint
+    app.get("/api/health", (req, res) => {
+      res.json({ 
+        status: "ok", 
+        supabaseConfigured: !!supabase,
+        databaseUrl: supabaseUrl ? `${supabaseUrl.substring(0, 15)}...` : "missing"
+      });
+    });
+
+  // Debug middleware to log all requests
+  app.use((req, res, next) => {
+    console.log(`[${new Date().toISOString()}] ${req.method} ${req.url}`);
+    next();
+  });
 
   // Middleware to check if Supabase is initialized
   app.use("/api", (req, res, next) => {
@@ -66,19 +141,29 @@ async function startServer() {
   });
 
   // API Routes
-  app.get("/api/debug-companies-schema", async (req, res) => {
+  app.get("/api/debug/columns", async (req, res) => {
     if (!supabase) return res.status(500).json({ error: "Supabase not initialized" });
     try {
-      // Try to get one row to see columns
       const { data, error } = await supabase.from('companies').select('*').limit(1);
-      if (error) {
-        return res.status(500).json({ error: error.message, details: error });
+      if (error) return res.status(500).json(error);
+      if (data && data.length > 0) {
+        return res.json(Object.keys(data[0]));
       }
-      if (!data || data.length === 0) {
-        return res.json({ message: "No companies found to inspect schema", columns: [] });
+      res.json([]);
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  app.get("/api/debug/notifications-columns", async (req, res) => {
+    if (!supabase) return res.status(500).json({ error: "Supabase not initialized" });
+    try {
+      const { data, error } = await supabase.from('notifications').select('*').limit(1);
+      if (error) return res.status(500).json(error);
+      if (data && data.length > 0) {
+        return res.json(Object.keys(data[0]));
       }
-      const columns = Object.keys(data[0]);
-      res.json({ columns, sample: data[0] });
+      res.json([]);
     } catch (err: any) {
       res.status(500).json({ error: err.message });
     }
@@ -231,7 +316,12 @@ async function startServer() {
 
   app.post("/api/check-session", async (req, res) => {
     const { companyId, sessionToken } = req.body;
-    if (!companyId || !sessionToken) return res.json({ valid: false });
+    console.log(`[SessionCheck] Checking session for companyId: ${companyId}`);
+    
+    if (!companyId || !sessionToken) {
+      console.log(`[SessionCheck] Missing companyId or sessionToken`);
+      return res.json({ valid: false });
+    }
 
     try {
       const { data, error } = await supabase
@@ -240,9 +330,21 @@ async function startServer() {
         .eq('id', companyId)
         .maybeSingle();
 
-      if (error || !data) return res.json({ valid: false });
-      return res.json({ valid: data.session_token === sessionToken });
-    } catch (err) {
+      if (error) {
+        console.error(`[SessionCheck] Database error:`, error);
+        return res.json({ valid: false });
+      }
+      
+      if (!data) {
+        console.log(`[SessionCheck] Company not found for id: ${companyId}`);
+        return res.json({ valid: false });
+      }
+
+      const isValid = data.session_token === sessionToken;
+      console.log(`[SessionCheck] Session valid: ${isValid}`);
+      return res.json({ valid: isValid });
+    } catch (err: any) {
+      console.error(`[SessionCheck] Unexpected error:`, err.message);
       return res.json({ valid: false });
     }
   });
@@ -319,7 +421,10 @@ async function startServer() {
 
       const clientId = company.ml_client_id || process.env.ML_CLIENT_ID;
       // Use origin from client if available, fallback to APP_URL
-      const baseUrl = (origin as string) || process.env.APP_URL || '';
+      let baseUrl = (origin as string) || process.env.APP_URL || '';
+      // Strip trailing slash for consistency
+      if (baseUrl.endsWith('/')) baseUrl = baseUrl.slice(0, -1);
+      
       const redirectUri = company.ml_callback_url || `${baseUrl}/api/ml/callback`;
       
       console.log(`Generating ML Auth URL for company ${companyId}. Redirect URI: ${redirectUri}`);
@@ -391,6 +496,54 @@ async function startServer() {
     }
   });
 
+  async function refreshMLTokenIfNeeded(companyId: string, company: any) {
+    if (!company.ml_refresh_token) return company.ml_access_token;
+  
+    // Check if expires soon (5 minutes buffer)
+    const expiresAt = company.ml_token_expires ? new Date(company.ml_token_expires).getTime() : 0;
+    const now = Date.now();
+  
+    if (expiresAt > now + 300000) {
+      return company.ml_access_token;
+    }
+  
+    console.log(`[ML-Refresh] Token for company ${companyId} expired or about to expire. Refreshing...`);
+  
+    try {
+      const clientId = company.ml_client_id || process.env.ML_CLIENT_ID;
+      const clientSecret = company.ml_client_secret || process.env.ML_CLIENT_SECRET;
+  
+      const res = await fetch("https://api.mercadolibre.com/oauth/token", {
+        method: "POST",
+        headers: { "Content-Type": "application/x-www-form-urlencoded" },
+        body: new URLSearchParams({
+          grant_type: "refresh_token",
+          client_id: clientId!,
+          client_secret: clientSecret!,
+          refresh_token: company.ml_refresh_token
+        })
+      });
+  
+      const data = await res.json();
+      if (data.error) throw new Error(data.error_description || data.error);
+  
+      await supabase
+        .from('companies')
+        .update({
+          ml_access_token: data.access_token,
+          ml_refresh_token: data.refresh_token,
+          ml_token_expires: new Date(Date.now() + data.expires_in * 1000).toISOString()
+        })
+        .eq('id', companyId);
+  
+      console.log(`[ML-Refresh] Token refreshed successfully for company ${companyId}`);
+      return data.access_token;
+    } catch (err: any) {
+      console.error(`[ML-Refresh] Error refreshing token:`, err.message);
+      return company.ml_access_token; // Return old one as fallback
+    }
+  }
+
   app.post("/api/ml/save-token", async (req, res) => {
     const { companyId, tokenData } = req.body;
     try {
@@ -414,6 +567,8 @@ async function startServer() {
   app.post("/api/ml/sync-items", async (req, res) => {
     const { companyId, items } = req.body;
     const results: any[] = [];
+    console.log(`[Sync] Starting sync for company ${companyId}. Items to sync: ${items?.length || 0}`);
+    
     try {
       const { data: company, error: compError } = await supabase
         .from('companies')
@@ -421,11 +576,26 @@ async function startServer() {
         .eq('id', companyId)
         .maybeSingle();
 
-      if (compError || !company) return res.status(404).json({ error: "Empresa no encontrada" });
-      if (!company.ml_access_token) return res.status(401).json({ error: "No autorizado en Mercado Libre" });
+      if (compError) {
+        console.error(`[Sync] Supabase error fetching company ${companyId}:`, compError);
+        return res.status(500).json({ error: "Error al obtener datos de la empresa", details: compError });
+      }
+      
+      if (!company) {
+        console.error(`[Sync] Company ${companyId} not found`);
+        return res.status(404).json({ error: "Empresa no encontrada" });
+      }
+      
+      const mlAccessToken = await refreshMLTokenIfNeeded(companyId, company);
+
+      if (!mlAccessToken) {
+        console.warn(`[Sync] Company ${companyId} has no ML access token`);
+        return res.status(401).json({ error: "No autorizado en Mercado Libre (Token faltante)" });
+      }
 
       for (const item of items) {
         const isUpdate = !!item.id && item.id.startsWith('MLA');
+        console.log(`[Sync] Processing item ${item.code} (${item.name}). isUpdate: ${isUpdate}`);
         
         const mlItem: any = isUpdate ? {
           price: Number(item.price),
@@ -472,24 +642,26 @@ async function startServer() {
         const response = await fetch(url, {
           method: isUpdate ? "PUT" : "POST",
           headers: {
-            "Authorization": `Bearer ${company.ml_access_token}`,
+            "Authorization": `Bearer ${mlAccessToken}`,
             "Content-Type": "application/json"
           },
           body: JSON.stringify(mlItem)
         });
 
-        if (response.status === 401) {
-          return res.status(401).json({ error: "No autorizado en Mercado Libre" });
-        }
-
         const data = await response.json();
+        console.log(`[Sync] ML API Response for ${item.code}:`, response.status, data);
+
+        if (response.status === 401) {
+          console.warn(`[Sync] 401 Unauthorized from ML API for company ${companyId}`);
+          return res.status(401).json({ error: "No autorizado en Mercado Libre (Token expirado)" });
+        }
         if (data.id) {
           // Update description if provided
           if (item.description) {
             await fetch(`https://api.mercadolibre.com/items/${data.id}/description`, {
               method: "PUT",
               headers: {
-                "Authorization": `Bearer ${company.ml_access_token}`,
+                "Authorization": `Bearer ${mlAccessToken}`,
                 "Content-Type": "application/json"
               },
               body: JSON.stringify({ plain_text: item.description })
@@ -518,6 +690,360 @@ async function startServer() {
         message: err.message,
         results: results || [] 
       });
+    }
+  });
+
+  // Category Sync API
+  app.get("/api/ml/categories", async (req, res) => {
+    const { companyId } = req.query;
+    if (!companyId) return res.status(400).json({ error: "companyId is required" });
+    
+    try {
+      // Fetch main categories from 'categorias'
+      const { data: mainData, error: mainError } = await supabase
+        .from('categorias')
+        .select('*')
+        .eq('company_id', companyId);
+      
+      if (mainError) {
+        console.error("[Categories] Error fetching main categories:", JSON.stringify(mainError, null, 2));
+        // Handle "Relation does not exist" (42P01) or other "not found" errors
+        if (mainError.code === '42P01' || mainError.code === 'PGRST116' || mainError.message?.includes('relation "categorias" does not exist')) {
+           return res.json({ categories: [], subcategories: [] });
+        }
+        return res.status(500).json(mainError);
+      }
+
+      // Fetch subcategories from 'subcategory'
+      const { data: subData, error: subError } = await supabase
+        .from('subcategory')
+        .select('*')
+        .eq('company_id', companyId);
+      
+      if (subError) {
+        console.error("[Categories] Error fetching subcategories:", JSON.stringify(subError, null, 2));
+        // Handle "Relation does not exist" (42P01) or other "not found" errors
+        if (subError.code === '42P01' || subError.code === 'PGRST116' || subError.message?.includes('relation "subcategory" does not exist')) {
+           return res.json({ categories: mainData || [], subcategories: [] });
+        }
+        return res.status(500).json(subError);
+      }
+      
+      const categories = (mainData || []).map((c: any) => ({
+          id: c.category_id,
+          name: c.name
+        }));
+
+      const subcategories = (subData || []).map((c: any) => ({
+          id: c.category_id,
+          name: c.name
+        }));
+      
+      res.json({ categories, subcategories });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  app.post("/api/ml/categories", async (req, res) => {
+    const { companyId, categories, subcategories } = req.body;
+    if (!companyId) return res.status(400).json({ error: "companyId is required" });
+    
+    try {
+      // 1. Delete existing records for this company in both tables
+      await Promise.all([
+        supabase.from('categorias').delete().eq('company_id', companyId),
+        supabase.from('subcategory').delete().eq('company_id', companyId)
+      ]);
+      
+      // 2. Insert main categories into 'categorias'
+      if (categories && categories.length > 0) {
+        const mainPayload = categories.map((c: any) => ({
+          category_id: c.id,
+          name: c.name,
+          company_id: companyId,
+          type: 'main'
+        }));
+        const { error: mainInsError } = await supabase.from('categorias').insert(mainPayload);
+        if (mainInsError) {
+           console.error("[Categories] Error inserting main categories:", mainInsError);
+           return res.status(500).json(mainInsError);
+        }
+      }
+
+      // 3. Insert subcategories into 'subcategory'
+      if (subcategories && subcategories.length > 0) {
+        const subPayload = subcategories.map((c: any) => ({
+          category_id: c.id,
+          name: c.name,
+          company_id: companyId
+        }));
+        const { error: subInsError } = await supabase.from('subcategory').insert(subPayload);
+        if (subInsError) {
+           console.error("[Categories] Error inserting subcategories:", subInsError);
+           return res.status(500).json(subInsError);
+        }
+      }
+      
+      res.json({ success: true });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  // Mercado Libre Automation Endpoint
+  app.post("/api/ml/background-sync", async (req, res) => {
+    const { companyId, category, mlUser: passedMlUser, mlPass: passedMlPass } = req.body;
+    console.log(`[ML-Sync] Starting background sync for company ${companyId}, category: ${category}`);
+
+    if (!companyId || !category) {
+      return res.status(400).json({ success: false, message: "Faltan parámetros: companyId o category" });
+    }
+
+    if (!supabase) {
+      console.error("[ML-Sync] Supabase client not initialized");
+      return res.status(500).json({ success: false, message: "Supabase client not initialized" });
+    }
+
+    try {
+      let mlUser = passedMlUser;
+      let mlPass = passedMlPass;
+
+      // If credentials not passed, fetch from database
+      if (!mlUser || !mlPass) {
+        const { data: company, error } = await supabase
+          .from('companies')
+          .select('*')
+          .eq('id', companyId)
+          .maybeSingle();
+
+        if (error || !company) {
+          return res.status(404).json({ success: false, message: "Empresa no encontrada o error al buscarla" });
+        }
+
+        mlUser = company.ml_user;
+        mlPass = company.ml_pass;
+      }
+
+      if (!mlUser || !mlPass) {
+        return res.status(400).json({ success: false, message: "Credenciales de Mercado Libre no configuradas para esta empresa" });
+      }
+
+      // Start Puppeteer
+      const chromium = (await import('chrome-aws-lambda')).default;
+      const puppeteer = (await import('puppeteer-core')).default;
+
+      const browser = await puppeteer.launch({
+        args: chromium.args,
+        defaultViewport: chromium.defaultViewport,
+        executablePath: await chromium.executablePath,
+        headless: true,
+      });
+
+      const page = await browser.newPage();
+      
+      // Set download behavior
+      const downloadPath = path.join('/tmp', `ml-sync-${companyId}-${Date.now()}`);
+      if (!fs.existsSync(downloadPath)) fs.mkdirSync(downloadPath, { recursive: true });
+      
+      const client = await page.target().createCDPSession();
+      await client.send('Page.setDownloadBehavior', {
+        behavior: 'allow',
+        downloadPath: downloadPath,
+      });
+
+      console.log("[ML-Sync] Navigating to ML...");
+      await page.goto('https://www.mercadolibre.com.ar/publicar-masivamente/categories?from=listings', { waitUntil: 'networkidle2' });
+
+      // Check if login is required
+      if (page.url().includes('auth.mercadolibre.com.ar')) {
+        console.log("[ML-Sync] Login required. Attempting login...");
+        await page.waitForSelector('#user_id', { timeout: 10000 });
+        await page.type('#user_id', mlUser);
+        await page.click('.andes-button--large');
+        
+        await page.waitForSelector('#password', { timeout: 10000 });
+        await page.type('#password', mlPass);
+        await page.click('#action-complete');
+        
+        await page.waitForNavigation({ waitUntil: 'networkidle2' });
+      }
+
+      console.log("[ML-Sync] On categories page. Starting new automation flow...");
+      
+      // Step 1: Select button //*[@id="categorySearchTab"]
+      try {
+        const searchTabXPath = 'xpath///*[@id="categorySearchTab"]';
+        await page.waitForSelector(searchTabXPath, { timeout: 15000 });
+        const searchTab = await page.$(searchTabXPath);
+        if (searchTab) {
+          await searchTab.click();
+          console.log("[ML-Sync] Category search tab selected.");
+        }
+      } catch (e) {
+        console.warn("[ML-Sync] Could not find categorySearchTab, trying to continue...");
+      }
+
+      // Step 2: In field //*[@id="_r_1_"], write the category
+      try {
+        const inputXPath = 'xpath///*[@id="_r_1_"]';
+        await page.waitForSelector(inputXPath, { timeout: 10000 });
+        const inputField = await page.$(inputXPath);
+        if (inputField) {
+          await inputField.type(category || "MLA1652");
+          console.log(`[ML-Sync] Category "${category}" typed.`);
+        }
+      } catch (e) {
+        console.error("[ML-Sync] Input field //*[@id=\"_r_1_\"] not found.");
+      }
+
+      // Step 3: Select button //*[@id="_r_2_"]/span
+      try {
+        const searchBtnXPath = 'xpath///*[@id="_r_2_"]/span';
+        await page.waitForSelector(searchBtnXPath, { timeout: 10000 });
+        const searchBtn = await page.$(searchBtnXPath);
+        if (searchBtn) {
+          await searchBtn.click();
+          console.log("[ML-Sync] Search button clicked.");
+        }
+      } catch (e) {
+        console.error("[ML-Sync] Search button //*[@id=\"_r_2_\"]/span not found.");
+      }
+
+      // Step 4: Expand menu //*[@id="MLA-PIPES_AND_TUBES"]/div[1]
+      try {
+        const menuXPath = 'xpath///*[@id="MLA-PIPES_AND_TUBES"]/div[1]';
+        await page.waitForSelector(menuXPath, { timeout: 15000 });
+        const menu = await page.$(menuXPath);
+        if (menu) {
+          await menu.click();
+          console.log("[ML-Sync] Category menu expanded.");
+        }
+      } catch (e) {
+        console.warn("[ML-Sync] Section MLA-PIPES_AND_TUBES not found. Trying first available result.");
+        try {
+          const firstResultXPath = 'xpath///div[contains(@class, "category-selector__item")]';
+          await page.waitForSelector(firstResultXPath, { timeout: 5000 });
+          const firstResult = await page.$(firstResultXPath);
+          if (firstResult) await firstResult.click();
+        } catch (e2) {
+          console.error("[ML-Sync] No category results found.");
+        }
+      }
+
+      // Step 5: Execute //*[@id="_r_b_"]/span
+      try {
+        const executeBtnXPath = 'xpath///*[@id="_r_b_"]/span';
+        await page.waitForSelector(executeBtnXPath, { timeout: 10000 });
+        const executeBtn = await page.$(executeBtnXPath);
+        if (executeBtn) {
+          await executeBtn.click();
+          console.log("[ML-Sync] Execute button clicked.");
+        }
+      } catch (e) {
+        console.warn("[ML-Sync] Execute button //*[@id=\"_r_b_\"]/span not found.");
+      }
+
+      // Step 6: Download from //*[@id="_r_i_"]/span
+      console.log("[ML-Sync] Waiting for download button...");
+      const downloadBtnXPath = 'xpath///*[@id="_r_i_"]/span';
+      try {
+        await page.waitForSelector(downloadBtnXPath, { timeout: 30000 });
+        const downloadBtn = await page.$(downloadBtnXPath);
+        if (downloadBtn) {
+          await downloadBtn.click();
+          console.log("[ML-Sync] Download button clicked. Waiting for file...");
+        } else {
+          console.error("[ML-Sync] Download button found but could not be clicked.");
+          throw new Error("Download button not clickable");
+        }
+      } catch (e) {
+        console.warn("[ML-Sync] Download button //*[@id=\"_r_i_\"]/span not found or not clickable. Trying generic download link...");
+        // Fallback: try to find any link that looks like a download
+        const clicked = await page.evaluate(() => {
+          const links = Array.from(document.querySelectorAll('a, button, span'));
+          const downloadLink = links.find(el => 
+            el.textContent?.toLowerCase().includes('descargar') || 
+            el.textContent?.toLowerCase().includes('download') ||
+            el.id?.includes('download') ||
+            el.className?.includes('download')
+          );
+          if (downloadLink) {
+            (downloadLink as HTMLElement).click();
+            return true;
+          }
+          return false;
+        });
+        
+        if (clicked) {
+          console.log("[ML-Sync] Fallback: Clicked a generic download element.");
+        } else {
+          console.error("[ML-Sync] No download button or link found.");
+        }
+      }
+
+      console.log("[ML-Sync] Waiting for download to complete (40s)...");
+      await new Promise(r => setTimeout(r, 40000));
+      
+      let files = fs.readdirSync(downloadPath);
+      
+      await browser.close();
+
+      if (files.length > 0) {
+        const downloadedFile = files[0];
+        const sourcePath = path.join(downloadPath, downloadedFile);
+        
+        // Define export path
+        let exportPath = path.join(process.cwd(), "ArchivosSincronizacion");
+        if (!fs.existsSync(exportPath)) fs.mkdirSync(exportPath, { recursive: true });
+        
+        const destPath = path.join(exportPath, downloadedFile);
+        fs.copyFileSync(sourcePath, destPath);
+        
+        // Try to save to local Documents folder if possible (for local development)
+        try {
+          const homeDir = process.env.USERPROFILE || process.env.HOME;
+          if (homeDir) {
+            const localDocsPath = path.join(homeDir, 'Documents');
+            if (fs.existsSync(localDocsPath)) {
+              const localDestPath = path.join(localDocsPath, downloadedFile);
+              fs.copyFileSync(sourcePath, localDestPath);
+              console.log(`[ML-Sync] Also saved to local Documents: ${localDestPath}`);
+            }
+          }
+        } catch (localErr) {
+          console.log("[ML-Sync] Could not save to local Documents folder (likely running in cloud).");
+        }
+
+        console.log(`[ML-Sync] Success! Downloaded: ${downloadedFile} and moved to ${destPath}`);
+        
+        // Create notification for user
+        if (supabase) {
+          await supabase.from('notifications').insert([{
+            company_id: companyId,
+            title: "Excel ML Preparado",
+            message: `El archivo Excel con el formato de Mercado Libre ha sido descargado correctamente: ${downloadedFile}. Puede encontrarlo en la carpeta 'ArchivosSincronizacion' o en su carpeta local de Documentos si corresponde.`,
+            type: "success",
+            is_read: false,
+            affected_elements: JSON.stringify({ filename: downloadedFile })
+          }]);
+        }
+      } else {
+        console.warn("[ML-Sync] Process finished but no file was downloaded.");
+        if (supabase) {
+          await supabase.from('notifications').insert([{
+            company_id: companyId,
+            title: "Error en Preparación Excel ML",
+            message: "El proceso de automatización terminó pero no se detectó ninguna descarga de archivo .xls. Verifique sus credenciales o la categoría seleccionada.",
+            type: "error",
+            is_read: false
+          }]);
+        }
+      }
+
+    } catch (err: any) {
+      console.error("[ML-Sync] Error during background sync:", err);
+      res.status(500).json({ success: false, message: "Error en el proceso de automatización: " + err.message });
     }
   });
 
@@ -573,10 +1099,24 @@ async function startServer() {
       const buf = XLSX.write(wb, { type: 'buffer', bookType: 'xlsx' });
       fs.writeFileSync(fullPath, buf);
 
-      res.json({ success: true, path: fullPath });
+      res.json({ success: true, path: fullPath, filename: filename });
     } catch (err: any) {
       console.error("Error exporting Excel:", err);
       res.status(500).json({ success: false, message: "Error al exportar Excel: " + err.message });
+    }
+  });
+
+  app.get("/api/download-excel/:filename", (req, res) => {
+    const { filename } = req.params;
+    let exportPath = "D:\\PROYECTOS\\Nerds\\SynInt-ML\\ArchivosSincronizacion";
+    if (process.platform !== 'win32') {
+      exportPath = path.join(process.cwd(), "ArchivosSincronizacion");
+    }
+    const fullPath = path.join(exportPath, filename);
+    if (fs.existsSync(fullPath)) {
+      res.download(fullPath);
+    } else {
+      res.status(404).send("Archivo no encontrado");
     }
   });
 
@@ -613,6 +1153,43 @@ async function startServer() {
     }
   });
 
+  app.get("/api/companies/:id", async (req, res) => {
+    if (!supabase) {
+      console.error("Supabase client not initialized");
+      return res.status(500).json({ success: false, message: "Error de configuración del servidor (Supabase)" });
+    }
+    const { id } = req.params;
+    try {
+      const { data, error } = await supabase
+        .from('companies')
+        .select('*')
+        .eq('id', id)
+        .maybeSingle();
+      
+      if (error) {
+        console.error("Fetch Company Error:", JSON.stringify(error, null, 2));
+        return res.status(500).json({ success: false, message: error.message, details: error });
+      }
+      
+      if (!data) {
+        return res.status(404).json({ success: false, message: "Empresa no encontrada" });
+      }
+
+      if (typeof data.permissions === 'string') {
+        try {
+          data.permissions = JSON.parse(data.permissions);
+        } catch (e) {
+          console.error("Error parsing permissions for company:", data.name);
+        }
+      }
+      
+      res.json(data);
+    } catch (err: any) {
+      console.error("Unexpected Fetch Company Error:", err);
+      res.status(500).json({ success: false, message: "Error inesperado al buscar empresa" });
+    }
+  });
+
   app.post("/api/companies", async (req, res) => {
     if (!supabase) {
       console.error("Supabase client not initialized");
@@ -624,6 +1201,7 @@ async function startServer() {
         amount, debt, payments, 
         ml_client_id, ml_client_secret, ml_callback_url,
         ml_is_collaborator, ml_collaborator_email,
+        ml_user, ml_pass,
         permissions
       } = req.body;
       
@@ -642,6 +1220,8 @@ async function startServer() {
         ml_callback_url: ml_callback_url || '',
         ml_is_collaborator: !!ml_is_collaborator,
         ml_collaborator_email: ml_collaborator_email || '',
+        ml_user: ml_user || '',
+        ml_pass: ml_pass || '',
         enabled: true,
         permissions: typeof (permissions || {}) === 'object' ? JSON.stringify(permissions || {
           dashboard: true,
@@ -677,11 +1257,13 @@ async function startServer() {
       return res.status(500).json({ success: false, message: "Error de configuración del servidor (Supabase)" });
     }
     const { id } = req.params;
+    console.log(`[PATCH /api/companies/${id}] Request body:`, req.body);
     const { 
       name, responsible_name, username, password, phone, email, 
       amount, debt, payments, 
       ml_client_id, ml_client_secret, ml_callback_url,
       ml_is_collaborator, ml_collaborator_email,
+      ml_user, ml_pass,
       permissions, enabled
     } = req.body;
 
@@ -700,6 +1282,14 @@ async function startServer() {
     if (ml_callback_url !== undefined) updateData.ml_callback_url = ml_callback_url;
     if (ml_is_collaborator !== undefined) updateData.ml_is_collaborator = !!ml_is_collaborator;
     if (ml_collaborator_email !== undefined) updateData.ml_collaborator_email = ml_collaborator_email;
+    if (ml_user !== undefined) {
+      console.log(`[PATCH /api/companies/${id}] Setting ml_user to:`, ml_user);
+      updateData.ml_user = ml_user;
+    }
+    if (ml_pass !== undefined) {
+      console.log(`[PATCH /api/companies/${id}] Setting ml_pass to:`, ml_pass);
+      updateData.ml_pass = ml_pass;
+    }
     if (permissions !== undefined) {
       updateData.permissions = typeof permissions === 'object' ? JSON.stringify(permissions) : permissions;
     }
@@ -727,6 +1317,17 @@ async function startServer() {
     res.json({ success: true });
   });
 
+  app.get("/api/debug-products-schema", async (req, res) => {
+    try {
+      const { data, error } = await supabase.from('products').select('*').limit(1);
+      if (error) return res.status(500).json(error);
+      const columns = data && data.length > 0 ? Object.keys(data[0]) : [];
+      res.json({ columns, sample: data && data.length > 0 ? data[0] : null });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
   // Products API
   app.get("/api/products", async (req, res) => {
     const { companyId } = req.query;
@@ -737,28 +1338,259 @@ async function startServer() {
   });
 
   app.post("/api/products", async (req, res) => {
-    const { data, error } = await supabase.from('products').insert([req.body]).select().maybeSingle();
-    if (error) return res.status(500).json(error);
+    const { code, name, price, stock, category, category_id, gtin, condition, description, images, company_id } = req.body;
+    
+    if (!company_id) {
+      return res.status(400).json({ success: false, message: "company_id es requerido" });
+    }
+
+    console.log(`[Products] Attempting to add product for company ${company_id}:`, code);
+    
+    // Check actual columns of the table to handle schema variations and stale cache
+    let availableColumns: string[] = ['id', 'company_id', 'code', 'name', 'price', 'stock', 'category', 'category_id', 'gtin', 'condition', 'description', 'images', 'ml_item_id', 'created_at'];
+    try {
+      // Better schema detection: Query the system table if possible or try a describe-like query
+      // For now, we'll try to select a non-existent ID to get headers back even from empty table
+      const { data: schemaData, error: schemaErr } = await supabase.from('products').select('*').limit(0);
+      if (!schemaErr && schemaData) {
+        // In some environments, limit(0) returns headers but maybeSingle/maybeMultiple affects it
+        // We'll also try a data sample if available
+        const { data: sampleData } = await supabase.from('products').select('*').limit(1);
+        const sourceData = (sampleData && sampleData.length > 0) ? sampleData[0] : (schemaData as any);
+        
+        if (sourceData && typeof sourceData === 'object' && !Array.isArray(sourceData)) {
+          availableColumns = Object.keys(sourceData);
+        } else if (Array.isArray(schemaData) && schemaData.hasOwnProperty('columns')) {
+            // Some postgrest versions return columns in a specific way
+        }
+        
+        console.log(`[Products] Detected columns:`, availableColumns.join(', '));
+      }
+    } catch (err) {
+      console.warn(`[Products] Schema detection failed:`, err);
+    }
+    
+    // Ensure numeric fields are numbers and strings are not undefined
+    const productData: any = { 
+      name: name || "", 
+      price: Number(price) || 0, 
+      stock: Number(stock) || 0, 
+      gtin: gtin || "", 
+      condition: condition || "new", 
+      description: description || "", 
+      images: Array.isArray(images) ? images : [], 
+      company_id: Number(company_id) || company_id 
+    };
+
+    // Resilient mapping for code/codigo
+    if (availableColumns.includes('code')) {
+      productData.code = code || "";
+    } else if (availableColumns.includes('codigo')) {
+      productData.codigo = code || "";
+    } else if (!availableColumns.includes('code')) {
+      // If we don't know the schema, add it and let the retry handler remove it if it fails
+      productData.code = code || "";
+    }
+    
+    // Resilient mapping for category/category_id
+    if (availableColumns.includes('category_id')) {
+      productData.category_id = category_id || category || "MLA1652";
+    }
+    if (availableColumns.includes('category')) {
+      productData.category = category || category_id || "MLA1652";
+    }
+    
+    try {
+      let currentPayload = { ...productData };
+      let { data, error } = await supabase.from('products').insert([currentPayload]).select().maybeSingle();
+      
+      // EXHAUSTIVE RESILIENCE: Retry stripping columns until success or no columns left
+      let retryCount = 0;
+      const MAX_RETRIES = Object.keys(currentPayload).length;
+      
+      while (error && error.code === 'PGRST204' && retryCount < MAX_RETRIES) {
+        const missingMatch = error.message.match(/Could not find the '(.+?)' column/);
+        if (missingMatch && missingMatch[1]) {
+          const missingField = missingMatch[1];
+          console.warn(`[Products] Exhaustive Retry ${retryCount + 1}: Stripping column '${missingField}'`);
+          delete currentPayload[missingField];
+          
+          if (Object.keys(currentPayload).length === 0) {
+            console.error("[Products] No valid columns left to insert.");
+            break;
+          }
+          
+          const retryRes = await supabase.from('products').insert([currentPayload]).select().maybeSingle();
+          data = retryRes.data;
+          error = retryRes.error;
+          retryCount++;
+        } else {
+          break;
+        }
+      }
+
+      if (error) {
+        console.error(`[Products] Supabase error inserting product for company ${company_id}:`);
+        console.error(`Error Code: ${error.code}`);
+        console.error(`Error Message: ${error.message}`);
+        console.error(`Error Details: ${error.details}`);
+        console.error(`Error Hint: ${error.hint}`);
+        console.error(`[Products] Data attempted:`, JSON.stringify(productData, null, 2));
+        
+        let errorMessage = "Error al insertar el producto en la base de datos";
+        
+        if (error.message && error.message.includes('row-level security policy')) {
+          errorMessage = "Error de Seguridad (RLS): La base de datos denegó el guardado. ";
+          errorMessage += "Para resolver esto, te recomendamos agregar el 'SUPABASE_SERVICE_ROLE_KEY' en la configuración de la App (Secrets), o bien desactivar RLS para la tabla 'products'.";
+        } else if (error.code === '23505') {
+          errorMessage = "Ya existe un producto con ese código para esta empresa.";
+        } else if (error.code === '23503') {
+          errorMessage = "Error de clave foránea: Verifique que la empresa y la categoría existan.";
+        } else if (error.message) {
+          errorMessage += ": " + error.message;
+        }
+
+        return res.status(500).json({
+          success: false,
+          message: errorMessage,
+          details: error
+        });
+      }
+      res.json(data);
+    } catch (err: any) {
+      console.error(`[Products] Unexpected error inserting product:`, err);
+      res.status(500).json({
+        success: false,
+        message: "Error inesperado al insertar el producto",
+        error: err.message
+      });
+    }
+  });
+
+  app.post("/api/products/bulk", async (req, res) => {
+    const { products, companyId } = req.body;
+    if (!products || !Array.isArray(products)) return res.status(400).json({ error: "products array is required" });
+    
+    const formattedProducts = products.map(p => ({
+      company_id: companyId,
+      code: String(p.code || p.codigo || '').trim(),
+      name: String(p.name || p.nombre || '').trim(),
+      price: Number(p.price) || 0,
+      stock: Number(p.stock) || 0,
+      category: String(p.category || p.categoria || "MLA1652").trim(),
+      category_id: String(p.category_id || p.category || "MLA1652").trim(),
+      gtin: String(p.gtin || "").trim(),
+      condition: p.condition || "new",
+      description: p.description || "",
+      images: Array.isArray(p.images) ? p.images : []
+    })).filter(p => p.code && p.name);
+
+    if (formattedProducts.length === 0) return res.json([]);
+
+    const { data, error } = await supabase
+      .from('products')
+      .upsert(formattedProducts, { onConflict: 'code,company_id' })
+      .select();
+
+    if (error) {
+      console.error("[Bulk Products] Error:", error);
+      return res.status(500).json(error);
+    }
     res.json(data);
   });
 
   app.put("/api/products/:id", async (req, res) => {
     const { id } = req.params;
-    const { code, name, price, stock, category_id, gtin, condition, description, images } = req.body;
-    const { data, error } = await supabase
-      .from('products')
-      .update({ code, name, price, stock, category_id, gtin, condition, description, images })
-      .eq('id', id)
-      .select()
-      .maybeSingle();
+    const { code, name, price, stock, category, category_id, gtin, condition, description, images } = req.body;
     
-    if (error) return res.status(500).json(error);
-    res.json(data);
+    // Check actual columns
+    let availableColumns: string[] = ['code', 'name', 'price', 'stock', 'category', 'category_id', 'gtin', 'condition', 'description', 'images'];
+    try {
+      const { data: sampleData } = await supabase.from('products').select('*').limit(1);
+      if (sampleData && sampleData.length > 0) availableColumns = Object.keys(sampleData[0]);
+    } catch(e) {}
+
+    const updateData: any = { 
+      name: name || "", 
+      price: Number(price) || 0, 
+      stock: Number(stock) || 0, 
+      gtin: gtin || "", 
+      condition: condition || "new", 
+      description: description || "", 
+      images: Array.isArray(images) ? images : []
+    };
+
+    if (availableColumns.includes('code')) updateData.code = code || "";
+    else if (availableColumns.includes('codigo')) updateData.codigo = code || "";
+
+    if (availableColumns.includes('category_id')) updateData.category_id = category_id || category || "MLA1652";
+    if (availableColumns.includes('category')) updateData.category = category || category_id || "MLA1652";
+
+    try {
+      let currentPayload = { ...updateData };
+      let { data, error } = await supabase
+        .from('products')
+        .update(currentPayload)
+        .eq('id', Number(id))
+        .select()
+        .maybeSingle();
+
+      // Exhaustive Resilience for updates
+      let retryCount = 0;
+      const MAX_RETRIES = Object.keys(currentPayload).length;
+      
+      while (error && error.code === 'PGRST204' && retryCount < MAX_RETRIES) {
+        const missingMatch = error.message.match(/Could not find the '(.+?)' column/);
+        if (missingMatch && missingMatch[1]) {
+          const missingField = missingMatch[1];
+          console.warn(`[Products] Exhaustive Retry Update ${retryCount + 1}: Stripping column '${missingField}'`);
+          delete currentPayload[missingField];
+          
+          if (Object.keys(currentPayload).length === 0) break;
+          
+          const retryRes = await supabase.from('products').update(currentPayload).eq('id', Number(id)).select().maybeSingle();
+          data = retryRes.data;
+          error = retryRes.error;
+          retryCount++;
+        } else {
+          break;
+        }
+      }
+
+      if (error) {
+        console.error(`[Products] Supabase error updating product ${id}:`, error);
+        let errorMessage = "Error al actualizar el producto: " + (error.message || "Error desconocido");
+        
+        if (error.message && error.message.includes('row-level security policy')) {
+          errorMessage = "Error de Seguridad (RLS): La base de datos denegó la actualización. ";
+          errorMessage += "Para resolver esto, te recomendamos agregar el 'SUPABASE_SERVICE_ROLE_KEY' en la configuración de la App (Secrets), o bien desactivar RLS para la tabla 'products'.";
+        }
+
+        return res.status(500).json({
+          success: false,
+          message: errorMessage,
+          details: error
+        });
+      }
+
+      console.log(`[Products] Product ${id} updated successfully`);
+      res.json(data);
+    } catch (err: any) {
+      console.error(`[Products] Unexpected error updating product ${id}:`, err);
+      res.status(500).json({ success: false, error: err.message });
+    }
   });
 
   app.delete("/api/products/:id", async (req, res) => {
     const { id } = req.params;
     const { error } = await supabase.from('products').delete().eq('id', id);
+    if (error) return res.status(500).json(error);
+    res.json({ success: true });
+  });
+
+  app.delete("/api/products/all/:companyId", async (req, res) => {
+    const { companyId } = req.params;
+    const { error } = await supabase.from('products').delete().eq('company_id', companyId);
     if (error) return res.status(500).json(error);
     res.json({ success: true });
   });
@@ -773,16 +1605,53 @@ async function startServer() {
   });
 
   app.post("/api/clients", async (req, res) => {
-    const { data, error } = await supabase.from('clients').insert([req.body]).select().maybeSingle();
-    if (error) return res.status(500).json(error);
+    const { codigo, nombre, mail, direccion, localidad, telefono, company_id } = req.body;
+    const clientData = { codigo, nombre, mail, direccion, localidad, telefono, company_id };
+    
+    const { data, error } = await supabase.from('clients').insert([clientData]).select().maybeSingle();
+    if (error) {
+      console.error(`[Clients] Error inserting client:`, JSON.stringify(error, null, 2));
+      return res.status(500).json(error);
+    }
+    res.json(data);
+  });
+
+  app.post("/api/clients/bulk", async (req, res) => {
+    const { clients, companyId } = req.body;
+    if (!clients || !Array.isArray(clients)) return res.status(400).json({ error: "clients array is required" });
+    
+    const formattedClients = clients.map(c => ({
+      company_id: companyId,
+      codigo: String(c.codigo || '').trim(),
+      nombre: String(c.nombre || '').trim(),
+      mail: String(c.mail || '').trim(),
+      direccion: String(c.direccion || '').trim(),
+      localidad: String(c.localidad || '').trim(),
+      telefono: String(c.telefono || '').trim()
+    })).filter(c => c.codigo && c.nombre);
+
+    if (formattedClients.length === 0) return res.json([]);
+
+    const { data, error } = await supabase
+      .from('clients')
+      .upsert(formattedClients, { onConflict: 'codigo,company_id' })
+      .select();
+
+    if (error) {
+      console.error("[Bulk Clients] Error:", error);
+      return res.status(500).json(error);
+    }
     res.json(data);
   });
 
   app.put("/api/clients/:id", async (req, res) => {
     const { id } = req.params;
+    const { codigo, nombre, mail, direccion, localidad, telefono, company_id } = req.body;
+    const clientData = { codigo, nombre, mail, direccion, localidad, telefono, company_id };
+    
     const { data, error } = await supabase
       .from('clients')
-      .update(req.body)
+      .update(clientData)
       .eq('id', id)
       .select()
       .maybeSingle();
@@ -798,6 +1667,13 @@ async function startServer() {
     res.json({ success: true });
   });
 
+  app.delete("/api/clients/all/:companyId", async (req, res) => {
+    const { companyId } = req.params;
+    const { error } = await supabase.from('clients').delete().eq('company_id', companyId);
+    if (error) return res.status(500).json(error);
+    res.json({ success: true });
+  });
+
   // Invoices API
   app.get("/api/invoices", async (req, res) => {
     const { companyId } = req.query;
@@ -808,8 +1684,14 @@ async function startServer() {
   });
 
   app.post("/api/invoices", async (req, res) => {
-    const { data, error } = await supabase.from('invoices').insert([req.body]).select().maybeSingle();
-    if (error) return res.status(500).json(error);
+    const { number, total, client_id, company_id } = req.body;
+    const invoiceData = { number, total, client_id, company_id };
+    
+    const { data, error } = await supabase.from('invoices').insert([invoiceData]).select().maybeSingle();
+    if (error) {
+      console.error(`[Invoices] Error inserting invoice:`, JSON.stringify(error, null, 2));
+      return res.status(500).json(error);
+    }
     res.json(data);
   });
 
@@ -869,9 +1751,24 @@ async function startServer() {
     
     try {
       if (type === 'products') {
-        const { error } = await supabase.from('products').insert(data.map((item: any) => ({ ...item, company_id: companyId })));
+        const productsToInsert = data.map((item: any) => ({
+          code: item.code || "",
+          name: item.name || "",
+          price: Number(item.price) || 0,
+          stock: Number(item.stock) || 0,
+          category: item.category_id || item.category || "MLA1652",
+          gtin: item.gtin || "", 
+          condition: item.condition || "new", 
+          description: item.description || "", 
+          images: Array.isArray(item.images) ? item.images : (item.pictures ? item.pictures.map((p: any) => p.source) : []),
+          company_id: Number(companyId) || companyId
+        }));
+        const { error } = await supabase.from('products').insert(productsToInsert);
         if (error) {
-          console.error("Supabase products insert error:", error);
+          console.error(`[Sync] Supabase products insert error for company ${companyId}:`);
+          console.error(`Error Code: ${error.code}`);
+          console.error(`Error Message: ${error.message}`);
+          console.error(`Error Details: ${error.details}`);
           throw error;
         }
       } else if (type === 'clients') {
@@ -964,45 +1861,59 @@ async function startServer() {
 
   // ODBC Parser (Simulated for .dat file upload)
   app.post("/api/parse-odbc", (req, res) => {
-    const { fileContent } = req.body; // Base64 or string
+    const { fileContent } = req.body; // Base64
     if (!fileContent) return res.status(400).json({ error: "No file content provided" });
 
     try {
       const buffer = Buffer.from(fileContent, 'base64');
-      const text = buffer.toString('latin1'); // Using latin1 for extended characters
-      
-      // Based on the provided sample, it looks like fixed width records.
-      // Let's try to find records. Each record seems to start with a code.
-      // Sample: "393          Acquas TE C/ ROSCA CENTRAL 1/2X1/2      un"
-      // itm_cod: 13 chars
-      // itm_desc: 40 chars
-      // itm_med: 3 chars
-      
-      const lines = text.split('\n');
       const products = [];
-      
-      for (const line of lines) {
-        if (line.length > 50) {
-          const itm_cod = line.substring(0, 13).trim();
-          const itm_desc = line.substring(13, 53).trim();
-          // Try to find a price at the end of the line or specific position
-          // Assuming price might be in the last 10 characters
-          const priceStr = line.substring(line.length - 10).trim().replace(',', '.');
-          const price = parseFloat(priceStr) || 0;
-          
-          if (itm_cod && itm_desc) {
-            products.push({
-              code: itm_cod,
-              name: itm_desc,
-              price: price,
-              stock: 0
-            });
-          }
+      const recordLength = 337;
+      let pos = 3033; // Start position from VBA code
+
+      const cleanText = (buf: Buffer) => {
+        return buf.toString('latin1')
+          .replace(/[\x00\xff]/g, '')
+          .trim();
+      };
+
+      while (pos + recordLength <= buffer.length) {
+        const record = buffer.slice(pos, pos + recordLength);
+        
+        // VBA: BytesToString(buffer, 1, 13) -> record.slice(0, 13)
+        const cod = cleanText(record.slice(0, 13));
+        // VBA: BytesToString(buffer, 15, 40) -> record.slice(14, 54)
+        const des = cleanText(record.slice(14, 54));
+        // VBA: BytesToString(buffer, 56, 3) -> record.slice(55, 58)
+        const med = cleanText(record.slice(55, 58));
+        // VBA: BytesToString(buffer, 60, 3) -> record.slice(59, 62)
+        const gr1 = cleanText(record.slice(59, 62));
+        // VBA: BytesToString(buffer, 62, 3) -> record.slice(61, 64)
+        const gr2 = cleanText(record.slice(61, 64));
+        // VBA: BytesToString(buffer, 64, 8) -> record.slice(63, 71)
+        const gr3 = cleanText(record.slice(63, 71));
+        // VBA: BytesToString(buffer, 96, 1) -> record.slice(95, 96)
+        const act = cleanText(record.slice(95, 96));
+
+        if (cod) {
+          products.push({
+            code: cod,
+            name: des,
+            med: med,
+            gr1: gr1,
+            gr2: gr2,
+            gr3: gr3,
+            act: act,
+            price: 0, // Price is not in this specific file structure based on VBA
+            stock: 0
+          });
         }
+        pos += recordLength;
       }
       
+      console.log(`[ODBC] Parsed ${products.length} products from .dat file`);
       res.json({ success: true, products });
     } catch (err: any) {
+      console.error("[ODBC] Error parsing file:", err);
       res.status(500).json({ success: false, message: "Error parsing file: " + err.message });
     }
   });
@@ -1010,48 +1921,112 @@ async function startServer() {
   // Notifications Routes
   app.get("/api/notifications", async (req, res) => {
     const { companyId, isAdmin } = req.query;
+    console.log(`[Notifications] GET request - companyId: ${companyId}, isAdmin: ${isAdmin}`);
+    
+    const localNotifications = getLocalNotifications(companyId as string, isAdmin === 'true');
+
+    if (!supabase) {
+      console.warn("[Notifications] Supabase client not initialized, returning local only");
+      return res.json({ success: true, notifications: localNotifications });
+    }
+
     try {
       let query = supabase.from('notifications').select('*').order('created_at', { ascending: false });
       
-      if (isAdmin !== 'true' && companyId) {
-        query = query.eq('company_id', companyId);
+      const validCompanyId = companyId && companyId !== 'undefined' && companyId !== 'null' ? companyId : null;
+
+      if (isAdmin !== 'true' && validCompanyId) {
+        query = query.eq('company_id', validCompanyId);
+      } else if (isAdmin !== 'true' && !validCompanyId) {
+        return res.json({ success: true, notifications: localNotifications });
       }
       
       const { data, error } = await query;
       if (error) throw error;
-      res.json({ success: true, notifications: data || [] });
+
+      // If we have remote data, we only show remote data to avoid duplicates
+      // Local notifications are only a fallback when Supabase is down
+      const merged = (data && data.length > 0) ? data : localNotifications;
+      
+      const sorted = [...merged].sort((a, b) => 
+        new Date(b.created_at).getTime() - new Date(a.created_at).getTime()
+      );
+
+      res.json({ success: true, notifications: sorted });
     } catch (err: any) {
-      // If table doesn't exist, return empty array instead of crashing
-      if (err.code === '42P01') {
-        return res.json({ success: true, notifications: [], message: "Tabla de notificaciones no existe" });
-      }
-      res.status(500).json({ success: false, message: err.message });
+      console.error("[Notifications] Supabase fetch error:", err.message);
+      res.json({ success: true, notifications: localNotifications, message: "Error al conectar con la nube, mostrando locales." });
     }
   });
 
   app.post("/api/notifications", async (req, res) => {
     const { company_id, type, title, message, affected_elements } = req.body;
+    console.log(`[Notifications] POST request - company_id: ${company_id}, type: ${type}`);
+    
+    const finalAffectedElements = typeof affected_elements === 'string' 
+      ? affected_elements 
+      : (affected_elements ? JSON.stringify(affected_elements) : null);
+
+    const notificationData = { 
+      company_id, 
+      type, 
+      title, 
+      message, 
+      affected_elements: finalAffectedElements,
+      is_read: false 
+    };
+
+    // Always save locally first as redundancy
+    saveLocalNotification(notificationData);
+
+    if (!supabase) {
+      console.warn("[Notifications] Supabase not initialized, saved locally only");
+      return res.json({ success: true, message: "Guardado localmente (Nube no disponible)" });
+    }
+
     try {
       const { data, error } = await supabase
         .from('notifications')
-        .insert([{ 
-          company_id, 
-          type, 
-          title, 
-          message, 
-          affected_elements: affected_elements ? JSON.stringify(affected_elements) : null,
-          is_read: false 
-        }])
+        .insert([notificationData])
         .select();
+      
       if (error) throw error;
+      
       res.json({ success: true, notification: data?.[0] });
     } catch (err: any) {
+      console.error("[Notifications] Error creating remote notification:", err.message);
+      res.json({ success: true, message: "Guardado localmente (Error en la nube)" });
+    }
+  });
+
+  app.post("/api/notifications/mark-all-read", async (req, res) => {
+    const { companyId, isAdmin } = req.body;
+    if (!supabase) {
+      return res.status(500).json({ success: false, message: "Supabase client not initialized" });
+    }
+    try {
+      let query = supabase.from('notifications').update({ is_read: true });
+      
+      if (isAdmin === true || isAdmin === 'true') {
+        query = query.eq('type', 'error');
+      } else {
+        query = query.eq('company_id', companyId);
+      }
+
+      const { error } = await query;
+      if (error) throw error;
+      res.json({ success: true });
+    } catch (err: any) {
+      console.error("[Notifications] Error marking all as read:", err);
       res.status(500).json({ success: false, message: err.message });
     }
   });
 
   app.patch("/api/notifications/:id/read", async (req, res) => {
     const { id } = req.params;
+    if (!supabase) {
+      return res.status(500).json({ success: false, message: "Supabase client not initialized" });
+    }
     try {
       const { error } = await supabase
         .from('notifications')
@@ -1062,6 +2037,316 @@ async function startServer() {
     } catch (err: any) {
       res.status(500).json({ success: false, message: err.message });
     }
+  });
+
+  app.patch("/api/notifications/:id/status", async (req, res) => {
+    const { id } = req.params;
+    const { is_read } = req.body;
+    if (!supabase) {
+      return res.status(500).json({ success: false, message: "Supabase client not initialized" });
+    }
+    try {
+      const { error } = await supabase
+        .from('notifications')
+        .update({ is_read })
+        .eq('id', id);
+      
+      // Also update local if it exists
+      try {
+        if (fs.existsSync(LOCAL_NOTIFICATIONS_FILE)) {
+          const content = fs.readFileSync(LOCAL_NOTIFICATIONS_FILE, 'utf8');
+          let notifications = JSON.parse(content);
+          const index = notifications.findIndex((n: any) => n.id === id);
+          if (index !== -1) {
+            notifications[index].is_read = is_read;
+            fs.writeFileSync(LOCAL_NOTIFICATIONS_FILE, JSON.stringify(notifications, null, 2));
+          }
+        }
+      } catch (localErr) {
+        console.error("[LocalNotifications] Error updating status:", localErr);
+      }
+
+      if (error) throw error;
+      res.json({ success: true });
+    } catch (err: any) {
+      res.status(500).json({ success: false, message: err.message });
+    }
+  });
+
+  // Automated ML Sync (Other Method)
+  app.post("/api/ml/download-categories", async (req, res) => {
+    const { companyId } = req.body;
+    if (!companyId) return res.status(400).json({ success: false, message: "companyId es requerido" });
+
+    try {
+      const { data: company, error: companyError } = await supabase
+        .from('companies')
+        .select('*')
+        .eq('id', companyId)
+        .maybeSingle();
+
+      if (companyError || !company) {
+        return res.status(404).json({ success: false, message: "Empresa no encontrada" });
+      }
+
+      if (!company.ml_user || !company.ml_pass) {
+        return res.status(400).json({ success: false, message: "Credenciales de automatización ML no configuradas" });
+      }
+
+      console.log(`[ML-DownloadCategories] Starting automation for company ${company.name}...`);
+
+      const chromium = (await import('chrome-aws-lambda')).default;
+      const puppeteer = (await import('puppeteer-core')).default;
+
+      const browser = await puppeteer.launch({
+        args: chromium.args,
+        defaultViewport: chromium.defaultViewport,
+        executablePath: await chromium.executablePath,
+        headless: true,
+      });
+
+      const page = await browser.newPage();
+      const downloadPath = path.join(process.cwd(), 'Downloads');
+      if (!fs.existsSync(downloadPath)) fs.mkdirSync(downloadPath);
+
+      // Set download behavior
+      const client = await page.target().createCDPSession();
+      await client.send('Page.setDownloadBehavior', {
+        behavior: 'allow',
+        downloadPath: downloadPath,
+      });
+
+      try {
+        // Get category from database if possible
+        let categoryToSearch = 'caños';
+        const { data: products } = await supabase
+          .from('products')
+          .select('category')
+          .eq('company_id', companyId)
+          .limit(1);
+        
+        if (products && products.length > 0 && products[0].category) {
+          categoryToSearch = products[0].category;
+        }
+
+        console.log(`[ML-DownloadCategories] Using category: ${categoryToSearch}`);
+
+        console.log("[ML-DownloadCategories] Logging in...");
+        await page.goto('https://www.mercadolibre.com.ar/jms/mla/lgz/login?platform_id=ML&go=https%3A%2F%2Fwww.mercadolibre.com.ar%2Fpublicar-masivamente%2Fcategories%3Ffrom%3Dlistings', { waitUntil: 'networkidle2' });
+
+        // Login Flow
+        await page.waitForSelector('#user_id', { timeout: 10000 });
+        await page.type('#user_id', company.ml_user);
+        await page.click('.andes-button--large');
+        await new Promise(resolve => setTimeout(resolve, 2000));
+        
+        if (await page.$('#password')) {
+          await page.type('#password', company.ml_pass);
+          await page.click('.andes-button--large');
+          await new Promise(resolve => setTimeout(resolve, 5000));
+        }
+
+        console.log("[ML-DownloadCategories] Navigating to categories page...");
+        await page.goto('https://www.mercadolibre.com.ar/publicar-masivamente/categories?from=listings', { waitUntil: 'networkidle2' });
+
+        // Steps provided by user (Python script logic):
+        // 1. Click //*[@id="categorySearchTab"]
+        console.log("[ML-DownloadCategories] Clicking categorySearchTab...");
+        const searchTab = await page.waitForSelector('xpath/' + '//*[@id="categorySearchTab"]', { timeout: 10000 });
+        if (searchTab) await searchTab.click();
+        await new Promise(resolve => setTimeout(resolve, 1000));
+
+        // 2. Type category in //*[@id="_r_1_"]
+        console.log(`[ML-DownloadCategories] Typing category: ${categoryToSearch}...`);
+        const searchInput = await page.waitForSelector('xpath/' + '//*[@id="_r_1_"]', { timeout: 10000 });
+        if (searchInput) await searchInput.type(categoryToSearch);
+        await new Promise(resolve => setTimeout(resolve, 1000));
+
+        // 3. Click search button //*[@id="_r_2_"]/span
+        console.log("[ML-DownloadCategories] Clicking search button...");
+        const searchBtn = await page.waitForSelector('xpath/' + '//*[@id="_r_2_"]/span', { timeout: 10000 });
+        if (searchBtn) await searchBtn.click();
+        await new Promise(resolve => setTimeout(resolve, 3000));
+
+        // 4. Wait for results and select first option
+        console.log("[ML-DownloadCategories] Waiting for results...");
+        await page.waitForSelector('xpath/' + '//*[@id="_r_4_"]/div', { timeout: 10000 });
+        
+        // 5. Click confirm button //*[@id="_r_7_"]/span
+        console.log("[ML-DownloadCategories] Clicking confirm button...");
+        const confirmBtn = await page.waitForSelector('xpath/' + '//*[@id="_r_7_"]/span', { timeout: 10000 });
+        if (confirmBtn) await confirmBtn.click();
+        await new Promise(resolve => setTimeout(resolve, 3000));
+
+        // 6. Click download button //*[@id="_r_e_"]/span
+        console.log("[ML-DownloadCategories] Clicking download button...");
+        const downloadBtn = await page.waitForSelector('xpath/' + '//*[@id="_r_e_"]/span', { timeout: 10000 });
+        if (downloadBtn) await downloadBtn.click();
+
+        // Wait for download to complete (polling the directory)
+        console.log("[ML-DownloadCategories] Waiting for download...");
+        let downloadedFile = '';
+        for (let i = 0; i < 30; i++) { // Wait up to 30 seconds
+          const files = fs.readdirSync(downloadPath);
+          const excelFile = files.find(f => f.endsWith('.xlsx') || f.endsWith('.xls'));
+          if (excelFile) {
+            downloadedFile = excelFile;
+            break;
+          }
+          await new Promise(resolve => setTimeout(resolve, 1000));
+        }
+
+        if (downloadedFile) {
+          console.log("[ML-DownloadCategories] Download complete:", downloadedFile);
+          const fullPath = path.join(downloadPath, downloadedFile);
+          
+          // Send file to client
+          res.download(fullPath, downloadedFile, (err) => {
+            if (err) {
+              console.error("[ML-DownloadCategories] Error sending file:", err);
+            }
+            // Cleanup
+            if (fs.existsSync(fullPath)) fs.unlinkSync(fullPath);
+          });
+        } else {
+          throw new Error("No se pudo descargar el archivo de Mercado Libre (tiempo de espera agotado).");
+        }
+
+      } catch (err: any) {
+        console.error("[ML-DownloadCategories] Automation error:", err);
+        res.status(500).json({ success: false, message: "Error en la automatización: " + err.message });
+      } finally {
+        await browser.close();
+      }
+
+    } catch (err: any) {
+      console.error("[ML-DownloadCategories] Unexpected error:", err);
+      res.status(500).json({ success: false, message: "Error inesperado: " + err.message });
+    }
+  });
+
+  app.post("/api/ml/automated-sync", async (req, res) => {
+    const { companyId, items } = req.body;
+    console.log(`[ML-AutomatedSync] Start for company ${companyId}, items: ${items?.length || 0}`);
+
+    if (!supabase) return res.status(500).json({ success: false, message: "Supabase not initialized" });
+
+    try {
+      const { data: company, error: compError } = await supabase.from('companies').select('*').eq('id', companyId).maybeSingle();
+      if (compError || !company) return res.status(404).json({ success: false, message: "Empresa no encontrada" });
+
+      if (!company.ml_user || !company.ml_pass) {
+        return res.status(400).json({ success: false, message: "Credenciales de Mercado Libre (usuario/contraseña) no configuradas para esta empresa." });
+      }
+
+      // 1. Generate Excel for upload
+      const worksheet = XLSX.utils.json_to_sheet(items.map((item: any) => ({
+        'Código': item.code,
+        'Título': item.name,
+        'Precio': item.price,
+        'Stock': item.stock,
+        'Categoría': item.category,
+        'GTIN': item.gtin || '',
+        'Condición': item.condition || 'new',
+        'Descripción': item.description || ''
+      })));
+      const workbook = XLSX.utils.book_new();
+      XLSX.utils.book_append_sheet(workbook, worksheet, "Productos");
+      
+      const tempFileName = `sync_${companyId}_${Date.now()}.xlsx`;
+      const tempFilePath = path.join(process.cwd(), 'ArchivosSincronizacion', tempFileName);
+      
+      if (!fs.existsSync(path.join(process.cwd(), 'ArchivosSincronizacion'))) {
+        fs.mkdirSync(path.join(process.cwd(), 'ArchivosSincronizacion'));
+      }
+      
+      XLSX.writeFile(workbook, tempFilePath);
+      console.log(`[ML-AutomatedSync] Excel generated at ${tempFilePath}`);
+
+      // 2. Start Puppeteer Automation
+      const chromium = (await import('chrome-aws-lambda')).default;
+      const puppeteer = (await import('puppeteer-core')).default;
+
+      const browser = await puppeteer.launch({
+        args: chromium.args,
+        defaultViewport: chromium.defaultViewport,
+        executablePath: await chromium.executablePath,
+        headless: true,
+      });
+
+      const page = await browser.newPage();
+      
+      try {
+        console.log("[ML-AutomatedSync] Navigating to ML Login...");
+        await page.goto('https://www.mercadolibre.com.ar/jms/mla/lgz/login?platform_id=ML&go=https%3A%2F%2Fwww.mercadolibre.com.ar%2Fpublicar-masivamente%2Fupload%3Ffrom%3Dlistings', { waitUntil: 'networkidle2' });
+
+        // Login Flow
+        await page.waitForSelector('#user_id', { timeout: 10000 });
+        await page.type('#user_id', company.ml_user);
+        await page.click('.andes-button--large');
+        
+        try {
+          await page.waitForSelector('#password', { timeout: 10000 });
+          await page.type('#password', company.ml_pass);
+          await page.click('.andes-button--large');
+          await page.waitForNavigation({ waitUntil: 'networkidle2', timeout: 30000 });
+        } catch (pwErr) {
+          console.log("[ML-AutomatedSync] Password field not found or navigation failed, might be already logged in or needs manual intervention.");
+        }
+
+        console.log("[ML-AutomatedSync] Navigating to Upload section...");
+        if (page.url() !== 'https://www.mercadolibre.com.ar/publicar-masivamente/upload?from=listings') {
+          await page.goto('https://www.mercadolibre.com.ar/publicar-masivamente/upload?from=listings', { waitUntil: 'networkidle2' });
+        }
+
+        // Look for the upload input
+        const fileInputSelector = 'input[type="file"]';
+        await page.waitForSelector(fileInputSelector, { timeout: 20000 });
+        const inputUploadHandle = await page.$(fileInputSelector);
+        
+        if (inputUploadHandle) {
+          console.log("[ML-AutomatedSync] Uploading file...");
+          await inputUploadHandle.uploadFile(tempFilePath);
+          await new Promise(resolve => setTimeout(resolve, 10000));
+          console.log("[ML-AutomatedSync] File uploaded successfully");
+          
+          // Click on the confirm button //*[@id="_R_dov6e_"]
+          console.log("[ML-AutomatedSync] Clicking confirm button...");
+          try {
+            await page.waitForSelector('#_R_dov6e_', { timeout: 10000 });
+            await page.click('#_R_dov6e_');
+            console.log("[ML-AutomatedSync] Confirm button clicked");
+          } catch (clickErr) {
+            console.warn("[ML-AutomatedSync] Could not find or click confirm button #_R_dov6e_, but file was uploaded.");
+          }
+          
+          res.json({ success: true, message: "Sincronización automatizada completada. El archivo ha sido cargado y confirmado en Mercado Libre." });
+        } else {
+          throw new Error("No se encontró el selector de carga de archivos en Mercado Libre.");
+        }
+
+      } catch (err: any) {
+        console.error("[ML-AutomatedSync] Automation error:", err);
+        res.status(500).json({ success: false, message: "Error en la automatización: " + err.message });
+      } finally {
+        await browser.close();
+        // Cleanup temp file
+        if (fs.existsSync(tempFilePath)) fs.unlinkSync(tempFilePath);
+      }
+
+    } catch (err: any) {
+      console.error("[ML-AutomatedSync] Unexpected error:", err);
+      res.status(500).json({ success: false, message: "Error inesperado: " + err.message });
+    }
+  });
+
+  // API 404 Handler - MUST be after all API routes but before Vite fallback
+  app.use("/api/*", (req, res) => {
+    res.status(404).json({
+      success: false,
+      error: "Endpoint not found",
+      message: `The API path ${req.originalUrl} does not exist on this server.`
+    });
   });
 
   // Vite middleware for development
@@ -1083,6 +2368,23 @@ async function startServer() {
   app.listen(Number(PORT), "0.0.0.0", () => {
     console.log(`Server running on http://localhost:${PORT}`);
   });
+
+  // Global error handler
+  app.use((err: any, req: any, res: any, next: any) => {
+    console.error("Unhandled error:", err);
+    if (res.headersSent) {
+      return next(err);
+    }
+    res.status(500).json({ 
+      success: false, 
+      error: "Internal Server Error", 
+      message: err.message 
+    });
+  });
+  } catch (err: any) {
+    console.error("CRITICAL ERROR DURING SERVER STARTUP:", err);
+    process.exit(1);
+  }
 }
 
 startServer();

@@ -1,5 +1,0 @@
-{
-  "name": "SynInt-ML.Version1.77",
-  "description": "Sincronizador de información entre Mercado Libre y sistemas locales de facturación. Versión 1.77 con persistencia acumulativa de items.",
-  "requestFramePermissions": []
-}

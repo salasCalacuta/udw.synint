@@ -1,5 +1,5 @@
 {
-  "name": "SynInt-ML.Version1.79",
-  "description": "Sincronizador de información entre Mercado Libre y sistemas locales de facturación. Versión 1.79 optimizada para despliegues externos (Render) con corrección de errores de ruta.",
+  "name": "SynInt-ML.Version1.80",
+  "description": "Sincronizador de información entre Mercado Libre y sistemas locales de facturación. Versión 1.80 con corrección de conflictos de dependencias para despliegue en Render.",
   "requestFramePermissions": []
 }

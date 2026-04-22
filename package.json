@@ -1,13 +1,13 @@
 {
-  "name": "SynInt-ML.Version1.79",
+  "name": "SynInt-ML.Version1.80",
   "private": true,
-  "version": "1.79.0",
+  "version": "1.80.0",
   "type": "module",
   "scripts": {
     "dev": "tsx server.ts",
     "build": "vite build",
     "start": "NODE_ENV=production tsx server.ts",
-    "install-linux": "npm install && npx puppeteer install",
+    "install-linux": "npm install --legacy-peer-deps && npx puppeteer install",
     "lint": "tsc --noEmit"
   },
   "dependencies": {
@@ -15,11 +15,11 @@
     "@supabase/supabase-js": "^2.99.1",
     "@tailwindcss/vite": "^4.1.14",
     "@vitejs/plugin-react": "^5.0.4",
-    "chrome-aws-lambda": "^10.1.0",
     "dotenv": "^17.2.3",
     "express": "^4.21.2",
     "lucide-react": "^0.546.0",
     "motion": "^12.23.24",
+    "puppeteer": "^24.0.0",
     "puppeteer-core": "^24.40.0",
     "react": "^19.0.0",
     "react-dom": "^19.0.0",

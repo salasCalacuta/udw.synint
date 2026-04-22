@@ -1,33 +1,32 @@
-# SynInt-ML.Version1.79
+# SynInt-ML.Version1.80
 
 ## Descripción
-Sincronizador de información entre Mercado Libre y sistemas locales de facturación. Versión 1.79 optimizada para despliegues externos (Render, Vercel, Railway) con corrección de errores de ruta y guía de despliegue.
+Sincronizador de información entre Mercado Libre y sistemas locales de facturación. Versión 1.80 optimizada para despliegues externos (Render, Vercel, Railway) con corrección de conflictos de dependencias y guías actualizadas.
 
-## 🚀 Guía Crucial para Despliegue en Render / PaaS
+## 🚀 Guía Actualizada para Despliegue en Render / PaaS
 
-Si experimentas el error `npm error enoent Could not read package.json`, sigue estos pasos obligatorios:
+### 1. Resolución de Error de Dependencias (ERRESOLVE)
+Si experimentas el error `npm error ERESOLVE could not resolve`, hemos tomado las siguientes medidas en la versión 1.80:
+- Se eliminó la dependencia conflictiva `chrome-aws-lambda` (que solo es necesaria en AWS Lambda) y se reemplazó por la versión completa de `puppeteer`.
+- **Acción recomendada en Render:** En el comando de construcción (**Build Command**), utiliza el flag `--legacy-peer-deps` si el error persiste.
+  - Comando Sugerido: `npm install --legacy-peer-deps && npm run build`
 
-1. **Estructura de Carpetas:** Asegúrate de que los archivos (`package.json`, `server.ts`, etc.) estén en la **raíz** de tu repositorio de GitHub. No deben estar dentro de una carpeta hija (como `synint-ml-main/`).
-2. **Configuración en Render:**
-   - **Root Directory:** Déjalo en blanco o pon `.` (punto).
-   - **Build Command:** `npm install && npm run build`
-   - **Start Command:** `npm start`
-3. **Variables de Entorno (Secrets):** Debes configurar manualmente estas variables en el panel de Render:
-   - `SUPABASE_URL`
-   - `SUPABASE_ANON_KEY`
-   - `SUPABASE_SERVICE_ROLE_KEY` (Opcional pero recomendado)
-   - `GEMINI_API_KEY` (Si usas funciones de IA)
+### 2. Pasos Generales Obligatorios
+- **Estructura de Carpetas:** Los archivos deben estar en la **raíz** de tu repositorio.
+- **Variables de Entorno:** Configura `SUPABASE_URL`, `SUPABASE_ANON_KEY`, `SUPABASE_SERVICE_ROLE_KEY` y `GEMINI_API_KEY` en el panel de Render.
+- **Build Command:** `npm install --legacy-peer-deps && npm run build`
+- **Start Command:** `npm start`
 
-## Historial de Cambios - Versión 1.79 (Optimización de Despliegue)
+## Historial de Cambios - Versión 1.80 (Limpieza de Dependencias)
 
-### 1. Compatibilidad con Producción Externa
-- Se ajustaron los scripts de `package.json` para ser compatibles con los ciclos de vida de Render y otras plataformas.
-- Se implementó forzado de `NODE_ENV=production` en el comando de inicio para asegurar que el servidor sirva correctamente los archivos estáticos desde la carpeta `dist/`.
-
-### 2. Resolución de Error ENOENT
-- Se identificó que la causa principal es una estructura de archivos anidada tras la exportación del ZIP. Esta guía documenta la solución definitiva.
+### 1. Corrección de Conflictos `chrome-aws-lambda`
+- Se identificó que `chrome-aws-lambda@10` causaba conflictos con versiones modernas de `puppeteer-core@24`.
+- Se migró a `puppeteer` estándar para entornos de servidor (Render), eliminando la dependencia problemática.
+- Se añadió soporte para instalaciones resilientes en despliegues automatizados.
 
 ---
+
+## Historial de Cambios - Versión 1.79 (Optimización de Despliegue)
 
 ## Historial de Cambios - Versión 1.78 (Correcciones y Resiliencia)
 
